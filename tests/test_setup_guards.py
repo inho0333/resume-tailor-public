@@ -53,33 +53,55 @@ def test_edited_profile_is_not_flagged():
 # ── bootstrap must not eat user_config.yaml ─────────────────────────────────
 
 def test_bootstrap_preserves_existing_user_config(tmp_path, monkeypatch):
-    """It writes the two keys it derives and keeps everything else.
+    """It patches the two keys it derives and leaves the rest of the file alone.
 
     It used to rewrite the file from scratch, which deleted base_resume_path,
     tailor_mode and the backend choice — exactly what the setup guide tells you
-    to set in the step before bootstrap.
+    to set in the step before bootstrap — along with every comment. The comments
+    matter: they are the copied explanations of each setting plus whatever notes
+    the user wrote about their own decisions.
     """
     cfg = tmp_path / "user_config.yaml"
-    cfg.write_text(yaml.safe_dump({
-        "resume_path": "/old/path.docx",
-        "base_resume_path": "/mine/base.docx",
-        "tailor_mode": "minimal",
-        "light_backend": "ollama",
-        "digest_hours": [7, 19],
-    }), encoding="utf-8")
+    cfg.write_text(
+        "# Targeting the corp-dev posting; v3 of the résumé.\n"
+        "# Keep the Apple template out of this.\n"
+        'resume_path: "/old/path.docx"\n'
+        "base_resume_path: /mine/base.docx\n"
+        "tailor_mode: minimal\n"
+        "light_backend: ollama\n"
+        "digest_hours: [7, 19]\n"
+        "\n"
+        "# counts came off the printed résumé\n"
+        "max_bullets_per_section:\n"
+        "  OLD CORP.: 9\n",
+        encoding="utf-8")
     monkeypatch.setattr(config, "USER_CONFIG_PATH", str(cfg))
 
     sections = [{"name": "ACME CORP.", "header_text": "ACME CORP., Austin, TX",
                  "bullets": [{"id": "acme-b1", "text": "a"}, {"id": "acme-b2", "text": "b"}]}]
     run._write_user_config("/new/resume.docx", sections)
 
-    written = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    text = cfg.read_text(encoding="utf-8")
+    written = yaml.safe_load(text)
     assert written["resume_path"] == "/new/resume.docx"
     assert written["max_bullets_per_section"] == {"ACME CORP.": 2}
     assert written["base_resume_path"] == "/mine/base.docx"
     assert written["light_backend"] == "ollama"
     assert written["digest_hours"] == [7, 19]
+    # the prose survives, which a load-and-dump would have silently dropped
+    assert "# Targeting the corp-dev posting; v3 of the résumé." in text
+    assert "# Keep the Apple template out of this." in text
+    assert "# counts came off the printed résumé" in text
     assert (tmp_path / "user_config.yaml.bak").exists()
+
+
+def test_patch_yaml_keys_ignores_a_commented_out_key(tmp_path):
+    """`# resume_path: ...` is documentation, not a setting."""
+    patched = run._patch_yaml_keys(
+        "# resume_path: /not/this/one.docx\nresume_path: /yes.docx\n",
+        {"resume_path": ["resume_path: /new.docx"]})
+    assert "# resume_path: /not/this/one.docx" in patched
+    assert yaml.safe_load(patched)["resume_path"] == "/new.docx"
 
 
 def test_bootstrap_first_run_makes_minimal_mode_work(tmp_path, monkeypatch):

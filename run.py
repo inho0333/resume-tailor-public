@@ -10,6 +10,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -1188,44 +1189,86 @@ def cmd_bootstrap(args):
           "--role \"Product Manager Intern\"")
 
 
+def _patch_yaml_keys(text, updates):
+    """Replace top-level keys in a YAML document, leaving every other byte alone.
+
+    Not a load-and-dump: this file is mostly comments — the ones copied from
+    user_config.example.yaml explaining each setting, plus whatever notes you
+    wrote about your own decisions. Re-serialising it keeps the values and throws
+    the prose away, which is its own kind of data loss. So the lines that define
+    the two keys bootstrap derives are rewritten in place, and a key that is not
+    there yet is appended.
+
+    `updates` maps a key to its already-rendered YAML lines (no trailing newline).
+    """
+    out, lines, i = [], text.splitlines(), 0
+    seen = set()
+    while i < len(lines):
+        line = lines[i]
+        key = next((k for k in updates if re.match(rf"{re.escape(k)}\s*:", line)), None)
+        if key is None:  # a commented-out or indented line never matches
+            out.append(line)
+            i += 1
+            continue
+        out.extend(updates[key])
+        seen.add(key)
+        i += 1
+        # drop the old value: its continuation lines are the indented ones
+        while i < len(lines) and lines[i].startswith((" ", "\t")):
+            i += 1
+    missing = [k for k in updates if k not in seen]
+    if missing:
+        if out and out[-1].strip():
+            out.append("")
+        for key in missing:
+            out.extend(updates[key])
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
 def _write_user_config(resume_path, sections):
     """Update user_config.yaml **without throwing away what is already in it**.
 
     Bootstrap used to write the file from scratch, which silently deleted every
-    other setting — `base_resume_path`, `tailor_mode`, the backend choice. A user
-    following the setup guide in order (write user_config, then bootstrap) lost
-    all of it and then found minimal mode refusing to run. Now only the two keys
-    bootstrap actually derives are touched, and the previous file is kept as a
-    .bak so nothing is unrecoverable.
+    other setting — `base_resume_path`, `tailor_mode`, the backend choice — and
+    every comment in it. A user following the setup guide in order (write
+    user_config, then bootstrap) lost all of it and then found minimal mode
+    refusing to run. Now the two keys bootstrap derives are patched in place,
+    everything else is untouched, and the previous file is kept as a .bak.
     """
-    derived = {
-        "resume_path": resume_path,
-        "max_bullets_per_section": {s["name"]: len(s["bullets"]) for s in sections},
+    caps = {s["name"]: len(s["bullets"]) for s in sections}
+    cap_lines = ["max_bullets_per_section:"] + [f"  {name}: {n}" for name, n in caps.items()]
+    updates = {
+        "resume_path": [f"resume_path: {json.dumps(resume_path)}"],
+        "max_bullets_per_section": cap_lines,
     }
-    existing = {}
+
     if os.path.exists(config.USER_CONFIG_PATH):
-        with open(config.USER_CONFIG_PATH, "r", encoding="utf-8") as f:
-            existing = yaml.safe_load(f) or {}
         backup = config.USER_CONFIG_PATH + ".bak"
         shutil.copy2(config.USER_CONFIG_PATH, backup)
-        kept = [k for k in existing if k not in derived]
+        with open(config.USER_CONFIG_PATH, "r", encoding="utf-8") as f:
+            text = f.read()
+        patched = _patch_yaml_keys(text, updates)
+        with open(config.USER_CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write(patched)
+        kept = [k for k in (yaml.safe_load(patched) or {}) if k not in updates]
         print(f"\nUpdated {os.path.basename(config.USER_CONFIG_PATH)}: set resume_path and "
-              f"max_bullets_per_section, kept your other {len(kept)} setting(s)"
+              f"max_bullets_per_section, left your other {len(kept)} setting(s) and all "
+              f"comments as they were"
               + (f" ({', '.join(sorted(kept))})" if kept else "")
               + f". Previous file saved as {os.path.basename(backup)}.")
-    else:
-        # First run: point minimal mode at the same document, so the default mode
-        # works without a second edit. Both keys are yours to change afterwards.
-        derived["base_resume_path"] = resume_path
-        derived["tailor_mode"] = "minimal"
+        return
 
-    merged = {**existing, **derived}
+    # First run: point minimal mode at the same document, so the default mode
+    # works without a second edit. Both keys are yours to change afterwards.
     with open(config.USER_CONFIG_PATH, "w", encoding="utf-8") as f:
         f.write("# Your settings. Gitignored: never committed, never shared.\n")
-        f.write("# `python run.py bootstrap` sets resume_path and max_bullets_per_section;\n")
-        f.write("# every other key here is yours and is preserved across re-runs.\n")
-        f.write("# See user_config.example.yaml for every key and what it does.\n")
-        yaml.safe_dump(merged, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        f.write("# `python run.py bootstrap` sets resume_path and max_bullets_per_section\n")
+        f.write("# and leaves every other line — including your comments — alone.\n")
+        f.write("# See user_config.example.yaml for every key and what it does.\n\n")
+        f.write("\n".join(updates["resume_path"]) + "\n")
+        f.write(f"base_resume_path: {json.dumps(resume_path)}\n")
+        f.write("tailor_mode: minimal\n")
+        f.write("\n".join(updates["max_bullets_per_section"]) + "\n")
 
 
 BASE_HEADER_COMMENT = """\
