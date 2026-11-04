@@ -1238,7 +1238,7 @@ def _write_user_config(resume_path, sections):
     caps = {s["name"]: len(s["bullets"]) for s in sections}
     cap_lines = ["max_bullets_per_section:"] + [f"  {name}: {n}" for name, n in caps.items()]
     updates = {
-        "resume_path": [f"resume_path: {json.dumps(resume_path)}"],
+        "resume_path": [f"resume_path: {json.dumps(resume_path, ensure_ascii=False)}"],
         "max_bullets_per_section": cap_lines,
     }
 
@@ -1266,7 +1266,7 @@ def _write_user_config(resume_path, sections):
         f.write("# and leaves every other line — including your comments — alone.\n")
         f.write("# See user_config.example.yaml for every key and what it does.\n\n")
         f.write("\n".join(updates["resume_path"]) + "\n")
-        f.write(f"base_resume_path: {json.dumps(resume_path)}\n")
+        f.write(f"base_resume_path: {json.dumps(resume_path, ensure_ascii=False)}\n")
         f.write("tailor_mode: minimal\n")
         f.write("\n".join(updates["max_bullets_per_section"]) + "\n")
 
