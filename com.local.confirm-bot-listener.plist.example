@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job for bot_listener.py — the long-poll listener that receives your
+  approve / skip button presses from Telegram.
+
+  OPTIONAL. Everything in this repo works without it; you only need the
+  listener if you want to approve postings from your phone.
+
+  To install:
+    1. cp com.local.confirm-bot-listener.plist.example \
+         com.local.confirm-bot-listener.plist
+    2. replace REPO_DIR with this repo's absolute path (3 places below)
+    3. put your bot token and chat id in the two placeholders
+    4. cp com.local.confirm-bot-listener.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/com.local.confirm-bot-listener.plist
+
+  The real .plist is gitignored, because it holds your bot token. Keep it that
+  way: a leaked token lets anyone post to your chat.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.local.confirm-bot-listener</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPO_DIR/.venv/bin/python</string>
+        <string>-u</string>
+        <string>bot_listener.py</string>
+    </array>
+    <key>WorkingDirectory</key><string>REPO_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TG_BOT_TOKEN</key><string>YOUR_BOT_TOKEN</string>
+        <key>TG_CHAT_ID</key><string>YOUR_CHAT_ID</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key><string>REPO_DIR/logs/bot_listener.log</string>
+    <key>StandardErrorPath</key><string>REPO_DIR/logs/bot_listener.log</string>
+</dict>
+</plist>

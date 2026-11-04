@@ -1,0 +1,4 @@
+# Tests only. The runtime needs requirements.txt alone.
+#   .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/python -m pytest -q
+pytest==9.1.1

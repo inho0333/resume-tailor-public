@@ -1,0 +1,367 @@
+# resume_db.sample.yaml — a fictional experience database, for the test suite only.
+#
+# Nothing here is real. The people, companies, products and figures are invented,
+# and the file exists so that `python -m pytest` runs on a fresh clone with no
+# private data present.
+#
+# It is shaped exactly like a filled-in resume_db.yaml (see resume_db.example.yaml
+# for what each field is for), and it is held to the same internal consistency the
+# real one is:
+#
+#   * every bullet `id` is globally unique
+#   * every figure that a test expects to survive an edit appears in that bullet's
+#     `text` or `context` — minimal_tailor._allowed_numbers() treats any other
+#     figure as invented, so a figure missing from here is a rejected edit
+#   * base_resume.sample.yaml is a subset of this file, with `text` identical
+#     character for character
+#
+# If you change a sentence here, run the suite: several tests derive their
+# expectations (length caps, word counts, shared-figure counts) from these values.
+
+sections:
+  # ── An early-stage investment firm ─────────────────────────────────────────
+  - name: ACME CORP.
+    header_text: ACME CORP.
+
+    bullets:
+      - id: acme-investment
+        text: >-
+          Invested $12.4M across 28 startups after building a bottom-up demand model, when
+          three failed deals showed founder projections went unchallenged, pricing each round
+          on evidence of willingness to pay rather than claimed market size, at a 33%
+          follow-on rate.
+        tags:
+          org: ACME CORP.
+          keywords: [investment, diligence, pricing, financial modelling, early-stage, SQL]
+          content_type: [quantitative-impact, judgement, analysis]
+        context:
+          why: >-
+            Three deals in a row had been priced off the founder's own market sizing. Nobody
+            owned the question of whether the demand was real.
+          how: >-
+            Built a bottom-up model for each deal: the number of reachable customers, what the
+            work they are replacing actually costs them, and the share of that the product can
+            capture. Held the capture assumption to 20% where founders claimed 60%.
+          impact: >-
+            $12.4M deployed across 28 startups over two years. 33% follow-on rate, 9 of the 28
+            raising a priced round within 18 months.
+        period: "2021-03 – 2023-08"
+
+      - id: acme-deck-tool
+        text: >-
+          Built an internal deck-scoring service to keep pace with a deal pipeline that had
+          tripled, when partners were still reading every inbound deck by hand, completing
+          database and API integration hands-on, saving the team 30 hours a month.
+        tags:
+          org: ACME CORP.
+          keywords: [automation, internal tooling, screening, API, prototyping]
+          content_type: [product-build, quantitative-impact]
+        context:
+          why: >-
+            Inbound decks tripled in a year while the investment team stayed the same size.
+            First-pass screening was the bottleneck and it was all manual reading.
+          how: >-
+            Wrote the scoring service end to end rather than waiting for engineering capacity:
+            the schema, the ingestion job and the API the partners' dashboard reads from.
+          impact: >-
+            30 hours a month returned to the team. Every inbound deck scored within a day of
+            arriving, against two weeks before.
+        period: "2022-05 – 2022-12"
+
+      - id: acme-batch-program
+        text: >-
+          Launched a cohort programme for 24 portfolio teams after founders said the firm's
+          support ended at the wire transfer, designing the curriculum around the three
+          questions every seed round is asked, drawing 500 applications for 24 places.
+        tags:
+          org: ACME CORP.
+          keywords: [programme design, portfolio support, operations, curriculum]
+          content_type: [leadership, cross-functional, quantitative-impact]
+        context:
+          why: >-
+            Portfolio surveys said the same thing twice: the money arrived and then nothing
+            did. The firm had no repeatable way to help after the cheque cleared.
+          how: >-
+            Interviewed eleven founders on what they had got wrong in their last raise, then
+            built the curriculum backwards from the three questions that sank them.
+          impact: >-
+            500 applications for 24 places in the first cohort. 24 teams completed it.
+        period: "2022-02 – 2022-11"
+
+      - id: acme-portfolio-reporting
+        text: >-
+          Standardised quarterly portfolio reporting across 28 companies after the investor
+          update took three weeks of manual collation, writing one template fund-wide and a
+          shared metric dictionary, cutting the cycle to four days.
+        tags:
+          org: ACME CORP.
+          keywords: [reporting, process design, metrics, stakeholder management]
+          content_type: [process-improvement, quantitative-impact]
+        context:
+          why: >-
+            Each company reported in its own spreadsheet, so every quarter started with three
+            weeks of reconciling definitions before anything could be said about the fund.
+          how: >-
+            Agreed one metric dictionary with the companies rather than imposing a format,
+            which is why they filled it in, and automated the collation step.
+          impact: >-
+            Reporting cycle three weeks to four days, across all 28 companies.
+        period: "2023-01 – 2023-06"
+
+      # Not on the approved résumé — a swap candidate.
+      - id: acme-ic-approval
+        text: >-
+          Won investment committee approval for 9 of 11 proposed deals by pre-circulating the
+          two objections each partner reliably raises, after a first attempt stalled on
+          questions nobody had written down.
+        tags:
+          org: ACME CORP.
+          keywords: [investment committee, persuasion, stakeholder management, diligence]
+          content_type: [judgement, communication]
+        context:
+          why: >-
+            The first memo went to committee and the discussion never reached the deal: it was
+            spent on assumptions that had been settled weeks earlier.
+          how: >-
+            Wrote down the objections each partner had raised in the previous four meetings and
+            answered them in the memo before it was circulated.
+          impact: >-
+            9 of 11 deals approved on first presentation.
+        period: "2022-09 – 2023-08"
+
+      # Not on the approved résumé. Deliberately shares its figures with
+      # acme-investment: it is the same money, written from a different angle, so
+      # minimal_tailor._duplicate_of_kept() must refuse to put both on one page.
+      - id: acme-investment-3d
+        text: >-
+          Led the firm's first two hardware investments, writing part of the $12.4M across 28
+          startups into deep-tech rounds no partner had underwritten before, after mapping
+          component costs against incumbent pricing.
+        tags:
+          org: ACME CORP.
+          keywords: [hardware, deep tech, diligence, new category]
+          content_type: [judgement, analysis]
+        context:
+          why: >-
+            The firm had never underwritten a hardware round and was passing on them by
+            default rather than by analysis.
+          how: >-
+            Built the bill of materials up from components and compared it with what the
+            incumbent charges, which is the only part of a hardware story that is checkable
+            before shipping.
+          impact: >-
+            Two hardware deals closed out of the $12.4M across 28 startups.
+        period: "2023-02 – 2023-08"
+
+  # ── A consumer marketplace ─────────────────────────────────────────────────
+  - name: EXAMPLE CO.
+    header_text: EXAMPLE CO.
+
+    bullets:
+      - id: example-review-ui
+        text: >-
+          Redesigned the review submission flow after session recordings showed shoppers
+          abandoning at a photo upload most of them did not need, moving verification to the
+          end of the flow, lifting completed reviews 22% with no fall in review quality.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [product management, conversion, user research, UX, A/B testing]
+          content_type: [quantitative-impact, product-build]
+        context:
+          why: >-
+            Reviews were the main thing shoppers read before buying, and the submission flow
+            lost two thirds of the people who started it.
+          how: >-
+            Watched 40 session recordings, found the drop was a photo upload presented as
+            required, and moved verification behind the submit step instead.
+          impact: >-
+            Completed reviews up 22%. Flagged-as-unhelpful rate unchanged at 3%.
+        period: "2020-04 – 2020-10"
+
+      - id: example-claim2
+        text: >-
+          Rebuilt claims routing around who caused the fault rather than how a shopper worded
+          the request, after a demand surge made hiring more agents the default answer,
+          extending settlement to cover partial orders, automating 4,000 tickets a month, 18%
+          of inbound volume.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [customer support, automation, taxonomy, process design, settlement]
+          content_type: [quantitative-impact, cross-functional]
+        context:
+          why: >-
+            Tickets grew faster than the team could. The outsourcing partner's answer was more
+            agents, which ties support cost to demand for good.
+          how: >-
+            Interviewed our own agents and the outsourced ones to find root causes, built a
+            branching taxonomy by who was at fault, then extended settlement so a claim could
+            cover part of an order, the case with no software path at all.
+          impact: >-
+            4,000 tickets a month auto-resolved out of roughly 22,000, 18% of inbound volume.
+            Average handling time 5 minutes to 4.
+        period: "2019-01 – 2019-11"
+
+      - id: example-kpi
+        text: >-
+          Established a SQL-based KPI framework through a 10x volume surge and presented it
+          company-wide each month, after cohort analysis showed novelty goods grew volume but
+          rarely repeated, shifting sourcing to hold repurchase above 30%.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [SQL, analytics, KPI, cohort analysis, sourcing, reporting]
+          content_type: [analysis, quantitative-impact]
+        context:
+          why: >-
+            Volume was growing 10x and every team had its own definition of a good month, so
+            nobody could say which of them was right.
+          how: >-
+            Built the metric set in SQL on top of the order log, then ran a cohort analysis
+            that separated one-off novelty purchases from repeat demand.
+          impact: >-
+            Repurchase rate held above 30% through the surge. One monthly review replaced four
+            team-level ones.
+        period: "2019-12 – 2020-03"
+
+      - id: example-pricing
+        text: >-
+          Repriced the 200 highest-volume listings after margin analysis found discounts going
+          to items that were already converting, replacing blanket promotions with a rule
+          keyed to inventory age, recovering 4 points of contribution margin.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [pricing, margin, promotions, inventory, analysis]
+          content_type: [quantitative-impact, analysis]
+        context:
+          why: >-
+            Promotions were set per category, so the best-selling items were discounted
+            hardest. Contribution margin had fallen for three quarters.
+          how: >-
+            Measured elasticity per listing, then tied the discount to how long the stock had
+            been sitting rather than to how well it sold.
+          impact: >-
+            4 points of contribution margin recovered on the 200 listings repriced.
+        period: "2020-11 – 2021-02"
+
+      # Not on the approved résumé. Shares its figures with example-claim2 on
+      # purpose: the same launch, from the engineering side.
+      - id: example-claim2-backend
+        text: >-
+          Extended the settlement service to net partial-order refunds into the next payout
+          run, the one claim type with no software path, which carried 4,000 tickets a month
+          and 18% of agent handling time.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [settlement, refunds, backend, payments]
+          content_type: [product-build]
+        context:
+          why: >-
+            A claim covering part of an order had to be handled by hand, every time.
+          how: >-
+            Worked with the payments team on an adjustment that carries forward into the next
+            payout run instead of clawing back from a balance.
+          impact: >-
+            4,000 tickets a month and 18% of handling time moved off the agents.
+        period: "2019-06 – 2019-11"
+
+      # A deliberately terse one-liner. Tests use it as the reference sentence for
+      # a swap, which is allowed to be longer than the DB line.
+      - id: example-quarterly-research
+        text: >-
+          Ran the quarterly category study that reset the sourcing plan, replacing a buyer's
+          intuition with repurchase evidence.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [user research, survey, sourcing, category management]
+          content_type: [analysis]
+        context:
+          why: >-
+            The sourcing plan was set from what the category buyer believed shoppers wanted.
+          how: >-
+            Ran a quarterly study of 500+ respondents against the repurchase data, so the plan
+            was argued from both.
+          impact: >-
+            500+ respondents per cycle. Two categories dropped, one added, on the first study.
+        period: "2020-01 – 2021-02"
+
+      - id: example-ma-screening
+        text: >-
+          Screened 40 acquisition targets against a scorecard the corporate development team
+          kept using, after two deals died in diligence on facts a first call would have
+          surfaced, shortlisting 6 for partner review.
+        tags:
+          org: EXAMPLE CO.
+          keywords: [corporate development, M&A, screening, diligence]
+          content_type: [analysis, judgement]
+        context:
+          why: >-
+            Targets arrived through whoever happened to know the founder, and two died late on
+            facts that were knowable on day one.
+          how: >-
+            Built a scorecard of the eight things that had actually killed past deals and
+            screened against it before any partner time was spent.
+          impact: >-
+            40 targets screened, 6 shortlisted, 2 reaching a term sheet.
+        period: "2021-01 – 2021-02"
+
+  # ── Everything that is not a job ───────────────────────────────────────────
+  - name: ADDITIONAL
+    header_text: ADDITIONAL
+
+    bullets:
+      # Fixed format: never edited, never swapped (minimal_tailor.PROTECTED_PREFIXES).
+      - id: add-skills
+        text: >-
+          Skills: Product Analytics (SQL, Python) | Financial Modelling (Excel) | Languages:
+          English (fluent), Spanish (conversational)
+        tags:
+          org: ADDITIONAL
+          keywords: [SQL, Python, Excel, financial modelling]
+          content_type: [skills]
+
+      - id: add-mentoring
+        label: Mentoring
+        text: >-
+          Advised 30 early-stage founders on pricing and go-to-market as a mentor at a
+          university startup centre.
+        tags:
+          org: ADDITIONAL
+          keywords: [mentoring, pricing, go-to-market, early-stage]
+          content_type: [leadership]
+        context:
+          impact: >-
+            30 founders over four cohorts.
+
+      - id: add-product-building
+        label: Product Building
+        text: >-
+          Shipped a scheduling tool used by 2,000 people a month, written alone, to learn the
+          parts of building a product a manager never touches.
+        tags:
+          org: ADDITIONAL
+          keywords: [side project, prototyping, product building]
+          content_type: [product-build]
+        context:
+          impact: >-
+            2,000 monthly users at the point of writing.
+
+      # Retired: blocked from selection, from the candidate list and at apply time.
+      # Kept rather than deleted so the record of the decision survives.
+      - id: add-retired-app
+        retired: true
+        text: >-
+          Co-founded a social app that shut down after 14 months, leading a team of three.
+        tags:
+          org: ADDITIONAL
+          keywords: [entrepreneurship, shut down]
+          content_type: [leadership]
+
+      # Superseded: the predecessor of add-mentoring. Still selectable on its own,
+      # but never alongside the bullet that replaced it.
+      - id: add-legacy-mentoring
+        superseded_by: add-mentoring
+        text: >-
+          Advised student founders at the campus entrepreneurship club.
+        tags:
+          org: ADDITIONAL
+          keywords: [mentoring, student]
+          content_type: [leadership]

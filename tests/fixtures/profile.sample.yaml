@@ -1,0 +1,70 @@
+# profile.sample.yaml — a fictional applicant, for the test suite only.
+#
+# profile.yaml is gitignored, so on a fresh clone there is no profile at all and
+# every prompt-building call raises ProfileError. tests/conftest.py loads this file
+# and installs it as the process-wide profile instead, so the suite runs with no
+# private data present.
+#
+# See profile.example.yaml for what each field is for. Three of these values are
+# load-bearing for the tests and must not be changed casually:
+#
+#   education.program  — fit_gate._degree_pattern() builds the regex that catches a
+#                        self-contradicting eligibility verdict ("MBA Intern" judged
+#                        ineligible) out of this string.
+#   target_roles       — fit_gate._pattern_signal() returns "strong" for a title
+#                        matching one of these, which floors the fit tier at "mid".
+#   avoid_roles        — the same function returns "weak" for these, which caps it.
+
+name: Jordan Sample
+
+education:
+  school: Example University
+  program: MBA
+  graduation: 2027-05
+  degree_is_technical: false
+
+work_authorization: "F-1 student visa; internships via CPT, which needs school approval only"
+citizenship_requirements_block: true
+sponsorship_needed_later: false
+
+career_summary: >-
+  Early-stage venture investing, after product management at a consumer
+  marketplace (pricing, customer support, analytics).
+
+employers:
+  - Acme Corp
+  - Example Co
+
+target_term: Summer 2027
+
+# Titles the applicant does apply to. "product manage" is a fragment on purpose: it
+# matches both "Product Manager" and "Product Management Intern".
+target_roles:
+  - product manage
+  - product owner
+  - corporate strategy
+  - corporate development
+  - business development
+  - strategy intern
+  - mba intern
+
+# Titles the applicant keeps declining. Still shown, but capped at "mid".
+avoid_roles:
+  - scheduling
+  - warehouse
+  - shift supervisor
+
+# The applicant's own sentences, which the model is shown as the target voice.
+# These two are base_resume.sample.yaml bullets, so the fixture speaks with one
+# voice the way a real profile does.
+style_examples:
+  - >-
+    Invested $12.4M across 28 startups after building a bottom-up demand model, when
+    three failed deals showed founder projections went unchallenged, pricing each round
+    on evidence of willingness to pay rather than claimed market size, at a 33%
+    follow-on rate.
+  - >-
+    Rebuilt claims routing around who caused the fault rather than how a shopper worded
+    the request, after a demand surge made hiring more agents the default answer,
+    extending settlement to cover partial orders, automating 4,000 monthly tickets, 18%
+    of inbound volume.

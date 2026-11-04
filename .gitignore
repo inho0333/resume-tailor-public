@@ -1,0 +1,38 @@
+# Everything personal. None of this is ever committed.
+
+# Who you are, and where your files live
+profile.yaml
+user_config.yaml
+
+# Your career data: the experience database, and the approved résumé's bullets
+resume_db.yaml
+base_resume.yaml
+
+# Hand-made backups of the above — they contain the same career data
+*.bak
+*.bak_*
+
+# Generated drafts, cover letters, reports
+output/
+
+# Pending approvals (each holds a whole job posting), decision journal,
+# listener heartbeat, LLM usage log
+state/
+logs/
+
+# Job postings you saved locally while testing
+jd_*.txt
+posting*.txt
+tmp_*.txt
+
+# launchd job with your Telegram token in it
+com.local.confirm-bot-listener.plist
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store

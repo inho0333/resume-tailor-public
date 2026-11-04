@@ -1,0 +1,138 @@
+# profile.example.yaml
+#
+# Who you are. Copy to profile.yaml and replace every value.
+#
+#     cp profile.example.yaml profile.yaml
+#
+# profile.yaml is gitignored. Nothing in it is ever committed, and nothing in it
+# is sent anywhere except into the prompts this tool builds on your machine.
+#
+# WHY THIS FILE EXISTS
+# Every judgment the tool makes is about a person: is this posting open to your
+# degree, does its work-authorisation language rule you out, is this the kind of
+# role you would actually take, do the rewritten sentences sound like yours.
+# These values used to be hardcoded in fit_gate.py and jd_extractor.py. Fill
+# this in and the prompts describe you; leave a field empty and the prompts stop
+# reasoning about it at all, which is the safe default.
+#
+# Check your work with:  python run.py doctor
+
+# Your name as it appears on the résumé. Used in output filenames and reports.
+# Not sent to any service.
+name: Jane Doe
+
+education:
+  # The institution's name as a recruiter would recognise it.
+  school: Example University
+
+  # The degree you are enrolled in, written the way postings write it: "MBA",
+  # "MS Computer Science", "MPP". This string goes into the eligibility prompt
+  # verbatim, so "MBA" matches a posting that says "MBA candidates" and
+  # "Master's in Business" does not.
+  program: MBA
+
+  # YYYY-MM. Postings gate on class year ("graduating in 2027", "rising
+  # second-year"), and this is what the tool compares against. Getting it wrong
+  # by a year silently mis-screens every posting, so check it once here rather
+  # than wondering later why good postings were tiered low.
+  graduation: 2027-05
+
+  # Is your degree a technical/engineering one? This flips how the eligibility
+  # screen reads "requires a technical degree":
+  #   false -> such a posting is reported as not a literal match (MBA, MPP, MA…)
+  #   true  -> such a posting is fine (MS CS, MS EE, PhD in engineering…)
+  degree_is_technical: false
+
+# Your authorisation to work, in one sentence, in the terms a recruiter uses.
+# This is read by the screen that decides whether a posting's immigration
+# language rules you out.
+#
+# Examples:
+#   "U.S. citizen"
+#   "Permanent resident (green card), no sponsorship needed"
+#   "F-1 student visa; internships via CPT, which needs school approval only"
+#   "Requires H-1B sponsorship for full-time work"
+#
+# LEAVE IT EMPTY ("") if you would rather the prompts never reason about your
+# status. The sponsorship check that still runs is a regex over the posting
+# text, not a model judgment, so an empty value simply means no filtering.
+work_authorization: ""
+
+# Do explicit citizenship requirements rule you out? Set true if "U.S. citizens
+# only", "U.S. Person" (ITAR/export control) or a security clearance is a hard
+# stop for you; such postings are then flagged. Set false if you are a citizen
+# and these are irrelevant. Ignored when work_authorization is empty.
+citizenship_requirements_block: true
+
+# Will you need sponsorship for full-time work after graduation? If true, a
+# posting that says "without the need for current OR FUTURE sponsorship" is
+# flagged even when the internship itself would be fine — that wording is a
+# first-round filter at employers who use the internship as a pipeline.
+sponsorship_needed_later: false
+
+# One or two sentences on your career, in the third person. This is the only
+# place the fit judgment learns what you have actually done, so write it the way
+# you would say it out loud, not as a list of titles.
+#
+#   "Product management at a consumer marketplace (payments, fraud), then
+#    early-stage VC investing in Southeast Asia."
+career_summary: >-
+  Product management at a mid-size fintech, then early-stage venture investing.
+
+# Past employers, as the résumé spells them. Used for relevance matching.
+employers:
+  - Acme Corp
+  - Example Ventures
+
+# Which term you are applying for, if it matters ("Summer 2027"). Shown to the
+# model so it does not offer you a posting for the wrong year. Optional.
+target_term: Summer 2027
+
+# The roles you actually want. These do real work: a posting whose title matches
+# one of these can never be tiered "low" by the local model (missing a good
+# posting costs more than one noisy notification), and "high" is only given when
+# both the model and the title agree.
+#
+# Write them as they appear in job titles, lowercase, one concept each. Short
+# fragments match more titles: "product manage" catches "Product Management
+# Intern" and "Product Manager, Payments".
+target_roles:
+  - product manage
+  - product owner
+  - corporate strategy
+  - corporate development
+  - business development
+  - strategy intern
+  - mba intern
+
+# Roles you keep declining. A posting matching these is capped at "mid" and sinks
+# to the bottom of the digest, but is still shown — the tool never hides a
+# posting from you outright.
+#
+# Leave empty on day one. Fill it in after a week of real notifications, when you
+# know what you keep skipping; `python run.py decisions` prints that history.
+avoid_roles: []
+
+# Two or three of your own strongest bullets, verbatim from your résumé.
+#
+# WHAT THEY ARE FOR: the model is shown these as "this is what a good bullet
+# looks like here" before it edits anything. They set sentence length, how much
+# context a bullet carries, and how numbers are written. They are the single
+# highest-leverage field in this file.
+#
+# USE YOUR OWN SENTENCES. Leave this empty and the tool falls back to fictional
+# examples (see profile.py), which is safe but weaker — your voice is the point.
+# Never paste someone else's bullets: their numbers leak into your output.
+#
+# The shape that works: verb -> What -> Why (the problem) -> How (the hard part
+# you solved) -> Impact (a measured number). 210-250 characters is normal.
+style_examples:
+  - >-
+    Migrated billing from a monthly to a weekly cycle for 12,000 merchants,
+    after churn interviews showed payout speed was the top reason for leaving,
+    by modelling the working-capital impact and rebuilding settlement to carry
+    corrections forward, cutting merchant churn 18%
+  - >-
+    Launched a self-service returns flow after support logs showed 60% of
+    tickets were one of three questions, coordinating support, logistics and two
+    engineering teams to ship in a single quarter, removing 4,000 tickets a month

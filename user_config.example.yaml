@@ -1,0 +1,139 @@
+# user_config.example.yaml
+#
+# Paths and settings. Copy to user_config.yaml and edit.
+#
+#     cp user_config.example.yaml user_config.yaml
+#
+# user_config.yaml is gitignored. `python run.py bootstrap --resume <your.docx>`
+# writes a first version of it; after that you edit it by hand.
+#
+# Facts about *you* (degree, graduation, work authorisation, target roles) are
+# not here — they are in profile.yaml. This file is only about files, modes and
+# which model does the work.
+#
+# Check your work with:  python run.py doctor
+
+# ── your résumé ─────────────────────────────────────────────────────────────
+
+# The one-page .docx everything is rendered from. Its fonts, margins and bullet
+# formatting ARE the output's formatting, so use the file you actually send out.
+# No default: a wrong path here is how you would mail someone else's résumé.
+resume_path: /Users/you/Documents/Your_Resume.docx
+
+# How a posting is tailored.
+#
+#   minimal  — start from the résumé you already approved, swap wording to the
+#              posting's vocabulary, and replace one or two bullets. Sentences
+#              are never rewritten. This is the mode worth using, and the
+#              default. It requires base_resume.yaml (below).
+#   rebuild  — re-pick every bullet from resume_db.yaml and rewrite them all.
+#              The older path, kept for comparison. It produces telegraphic
+#              sentences under the character budget, which is why it is not the
+#              default. Use it only before you have written base_resume.yaml.
+tailor_mode: minimal
+
+# The .docx that minimal mode edits — normally the same file as resume_path.
+# Required in minimal mode, with no default on purpose.
+base_resume_path: /Users/you/Documents/Your_Resume.docx
+
+# Optional. Finished drafts are also copied here, one subfolder per company — a
+# cloud-drive folder, say, so they show up on your phone. A path that is not
+# mounted is skipped quietly and never blocks a run. Omit to disable.
+# sync_dir: /Users/you/Library/CloudStorage/.../Resumes
+
+# ── how many bullets a section may show ─────────────────────────────────────
+#
+# Per section heading, exactly as it appears in your .docx. `bootstrap` fills
+# this with the counts it parsed out of your own résumé, because those counts
+# are what made it fit on one page. Raising a number here is the quickest way
+# to spill onto page two.
+max_bullets_per_section:
+  ACME CORP.: 4
+  EXAMPLE CO.: 4
+  ADDITIONAL: 3
+
+# ── which model does the work ───────────────────────────────────────────────
+#
+# Two roles (see llm_client.py):
+#   light — classification and extraction. Runs often, tolerates a small model.
+#   heavy — writing and judging the sentences on your résumé. A few calls per
+#           posting, and the whole quality of the output.
+#
+# Values: auto | ollama | claude-cli | claude-api | codex-cli | <your own>
+#
+#   auto        light: a local model if you have one, else a CLI, else the API.
+#               heavy: a frontier model, falling back to local only as a last
+#               resort — and it tells you when it does.
+#   ollama      free and local, needs `ollama serve` + a pulled model. Good for
+#               light work. Noticeably weaker at writing bullets.
+#   claude-cli  `claude -p` on the logged-in Claude Code CLI (billed to the
+#               subscription; the rate limit is shared with your own
+#               interactive Claude Code sessions).
+#   claude-api  Anthropic API with ANTHROPIC_API_KEY in your environment.
+#               Metered per token.
+#   codex-cli   OpenAI Codex, or any other agent CLI you define below.
+#
+# A reasonable split on a laptop with no local model: leave both on auto, which
+# resolves to whichever CLI you have. On a desktop that is always on, Ollama for
+# light work costs nothing.
+light_backend: auto
+heavy_backend: auto
+
+# Extra CLI backends, as argv. `codex-cli` and `gemini-cli` have built-in
+# defaults (see config.py); anything here overrides them, and a new key adds a
+# backend you can pass to --backend.
+#
+#   prompt_via: stdin  — the prompt is piped in (most agent CLIs)
+#   prompt_via: arg    — the prompt is appended as the last argument
+#   strip_prefix_lines — drop N banner lines the CLI prints before the answer
+#
+# Verify yours with:  python run.py doctor --probe --backend codex-cli
+# backends:
+#   codex-cli:
+#     command: [codex, exec, --skip-git-repo-check, "-"]
+#     prompt_via: stdin
+#   my-wrapper:
+#     command: [/Users/you/bin/ask-model]
+#     prompt_via: stdin
+
+# A heavy rewrite genuinely takes minutes. Lower this and you cancel work that
+# was about to succeed.
+cli_timeout_seconds: 1200
+
+# ── the approval gate ───────────────────────────────────────────────────────
+#
+# Only relevant if something hands postings to this tool automatically (a job
+# watcher, cron). Running `tailor` yourself ignores all of it.
+
+# Process a handed-over posting end to end without a human. False means you get
+# a notification and run `tailor` yourself.
+auto_draft: true
+
+# Drop an approval request nobody answered after this many days. Each one holds
+# a whole job posting, and a three-week-old posting has usually closed.
+confirm_ttl_days: 7
+
+# Batch approval requests instead of sending one message per posting. These are
+# local-time hours; an empty list sends each one immediately (which is how you
+# end up with fifteen messages in a day and stop reading them).
+digest_hours: [9, 20]
+digest_max_items: 10
+
+# Postings judged below this fit tier are not offered an approve/skip pair, just
+# a single "draft it anyway" button. One of: high, mid, low.
+prefit_ask_min_tier: mid
+
+# ── quality gates ───────────────────────────────────────────────────────────
+
+# Score each draft the way a recruiter would, and put the objections in the
+# report.
+recruiter_review: true
+
+# Let that step REWRITE sentences too. Off by default in minimal mode: this is
+# the step that produced unreadable compressions like "held to ~20%/~5% vs
+# 60-70% claims". The score and the objections still reach you; the wording
+# stays yours.
+recruiter_polish: false
+
+# Flag the report when the recruiter score is below this (out of 10).
+recruiter_score_warn: 7

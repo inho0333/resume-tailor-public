@@ -1,0 +1,48 @@
+# base_resume.example.yaml
+#
+# Your canonical résumé, as data. Copy to base_resume.yaml and replace.
+# base_resume.yaml is gitignored.
+#
+# BOOTSTRAP DOES NOT GENERATE THIS FILE. You write it by hand, once.
+#
+# What it is for: "minimal" mode does not rewrite your résumé. It starts from the
+# sentences you already approved and makes the smallest possible edits. This file
+# IS that baseline — the quality floor everything is measured against. If an edit
+# fails validation, the sentence here is what ships.
+#
+# Two rules, both of which are hard errors if broken:
+#   1. every `id` must exist in resume_db.yaml
+#   2. every `header_text` must match the heading in your .docx character for character
+
+# Absolute path to the .docx these sentences were taken from. Keep them in sync:
+# if you edit the document by hand, edit this file too, or the baseline is a lie.
+source_docx: /Users/you/Documents/Your_Resume.docx
+
+sections:
+  - name: ACME CORP.
+    header_text: ACME CORP.
+    bullets:
+      # The sentence here should be IDENTICAL to resume_db.yaml's `text` for the
+      # same id, and identical to what is in the .docx today. Three places, one
+      # sentence. That redundancy is the point: it is how the tool detects drift.
+      - id: acme-billing-migration
+        text: >-
+          Migrated billing from a monthly to a weekly cycle for 12,000 merchants,
+          after churn interviews showed payout speed was the top reason for leaving,
+          by modelling the working-capital impact and rebuilding settlement to carry
+          corrections forward, cutting merchant churn 18%.
+
+      - id: acme-support-routing
+        text: >-
+          Rebuilt customer support routing around fault attribution rather than
+          inquiry wording, after a transaction surge made headcount the default
+          answer, by interviewing agents to build a taxonomy and reaching into
+          settlement for partial-order cases, automating 18% of monthly volume.
+
+  - name: ADDITIONAL
+    header_text: ADDITIONAL
+    bullets:
+      - id: add-mentoring
+        text: >-
+          Advised 30+ early-stage founders on product strategy as a university
+          startup-centre mentor.
