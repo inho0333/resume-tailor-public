@@ -126,6 +126,8 @@ in what you send.
 | `confirm_handler.py` | what a button press does |
 | `genlock.py` | one generation at a time |
 | `log_stamp.py` | timestamps every log line |
+| `ask.py` | every interactive prompt. With no terminal it returns the default instead of raising EOFError, so a piped or scheduled run behaves like `--auto` |
+| `errors.py` | `SetupError`: a problem the user has to fix. `run.py` prints it as a sentence and exits 1; everything else keeps its traceback |
 
 ### `vendor/`
 
@@ -144,7 +146,7 @@ the documentation.
 | `profile.yaml` | degree, graduation, work authorisation, target roles, style examples | you |
 | `user_config.yaml` | paths, mode, per-section caps, backends | `bootstrap`, then you |
 | `resume_db.yaml` | every bullet you could use, with `context` (background **and** the allowed numbers) | `bootstrap`, then hours of you |
-| `base_resume.yaml` | which bullets the approved résumé shows, keyed to .docx headings | you, by hand |
+| `base_resume.yaml` | which bullets the approved résumé shows, keyed to .docx headings | `bootstrap` writes it from the document; you review it |
 
 And runtime state, also gitignored:
 
@@ -181,11 +183,20 @@ Break these and the tool stops being trustworthy.
    because the original fits.
 5. **Nothing is submitted.** The closest the code comes to applying is sending a
    .docx to your own Telegram chat. Keep it that way.
-6. **No personal fact in code.** Anything about the applicant belongs in
+6. **Content is never lost silently.** After rendering, the document must hold
+   exactly the bullets that were selected (`_verify_rendered` for the sentences,
+   `_verify_render_counts` for the counts). In minimal mode a section the result
+   does not cover is a `SetupError`, never a substituted database bullet — that
+   substitution once produced a résumé with half its content while every check
+   printed PASS.
+7. **A broken setup costs nothing.** `_validate_inputs` runs before the first
+   model call and validates base_resume.yaml against the database and the
+   document, because these failures used to appear after the paid work.
+8. **No personal fact in code.** Anything about the applicant belongs in
    `profile.yaml`. A prompt that needs a fact asks `profile.py` for it.
-7. **No credential in a file.** `ANTHROPIC_API_KEY`, `TG_BOT_TOKEN`,
+9. **No credential in a file.** `ANTHROPIC_API_KEY`, `TG_BOT_TOKEN`,
    `TG_CHAT_ID` come from the environment.
-8. **Nothing requires a specific vendor.** Any backend that can answer a prompt
+10. **Nothing requires a specific vendor.** Any backend that can answer a prompt
    can drive the pipeline; a missing Ollama is not an error.
 
 ## Changing things

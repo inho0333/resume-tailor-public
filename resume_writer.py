@@ -3,6 +3,8 @@ import copy
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 
+import errors
+
 
 def _base_run_index(runs):
     for i, run in enumerate(runs):
@@ -133,11 +135,18 @@ def _clone_bullet_paragraph(template_p, parent, text):
     return new_p_el
 
 
-def render_sections(doc, sections_result, db):
+def render_sections(doc, sections_result, db, allow_db_fallback=True):
     """sections_result: what tailor_engine.generate_section_revisions() returned,
     {"sections": {name: [{"id":..., "text":...}, ...]}, ...}.
     db: the section list returned by resume_db.load_db() — used to look up header_text and as
     the fallback for empty sections.
+
+    allow_db_fallback: what to do with a section the result says nothing about. True (rebuild
+    mode, where the model picks a variable number of bullets) substitutes the first bullet in
+    the database so the section is not left empty. **False (minimal mode) raises**, because
+    there the result comes from base_resume.yaml: a section missing from it means that file is
+    wrong, and quietly substituting a different bullet produced a résumé missing most of its
+    content that every downstream check still reported as PASS.
 
     For each section, every existing bullet paragraph is deleted and as many new ones as the
     LLM selected are cloned in (variable-count rendering). One section is handled completely
@@ -154,6 +163,12 @@ def render_sections(doc, sections_result, db):
         name = section["name"]
         bullets_out = sections_result.get("sections", {}).get(name, [])
         if not bullets_out:
+            if not allow_db_fallback:
+                raise errors.SetupError(
+                    f"nothing to render for section '{name}'. In minimal mode the bullets come "
+                    f"from base_resume.yaml, so this means that file does not cover "
+                    f"'{name}'. Run `python run.py doctor` — it checks base_resume.yaml "
+                    f"against both the database and your document.")
             fallback = section["bullets"][0]
             print(f"  [warning] no bullet selected for section '{name}', falling back to the "
                   f"first bullet in the DB: {fallback['id']}")

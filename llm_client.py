@@ -72,11 +72,16 @@ class OllamaBackend:
     name = "ollama"
     is_local = True
 
-    def __init__(self, model=None, options=None):
+    def __init__(self, model=None, options=None, timeout=None):
         from vendor import ollama_client  # imported only if this backend is used
         self._ollama = ollama_client
         self.model = model or ollama_client.DEFAULT_MODEL
         self.options = options
+        # A local model with a raised budget takes minutes on a 10KB prompt: the
+        # default 120s read timeout cut a heavy call off mid-generation and lost the
+        # step. Classification stays on the short timeout, where a hang should fail
+        # fast rather than block a queue.
+        self.timeout = timeout or ollama_client.DEFAULT_TIMEOUT
         self.name = f"ollama:{self.model}"
 
     @staticmethod
@@ -89,7 +94,7 @@ class OllamaBackend:
 
     def complete(self, prompt):
         return self._ollama.chat(prompt, model=self.model, json_mode=True,
-                                 options=self.options)
+                                 options=self.options, timeout=self.timeout)
 
 
 class ClaudeCLIBackend:
@@ -295,7 +300,9 @@ def get_backend(name=None, role="light", log=None, model=None, fallback_model=No
     """A backend object with .name and .complete(prompt) -> str."""
     resolved = resolve_name(name, role=role, log=log)
     if resolved == "ollama":
-        return OllamaBackend(options=config.OLLAMA_HEAVY_OPTIONS if role == "heavy" else None)
+        heavy = role == "heavy"
+        return OllamaBackend(options=config.OLLAMA_HEAVY_OPTIONS if heavy else None,
+                             timeout=config.CLI_TIMEOUT_SECONDS if heavy else None)
     if resolved == "claude-cli":
         return ClaudeCLIBackend(model=model, fallback_model=fallback_model, tag=tag)
     if resolved == "claude-api":

@@ -126,6 +126,36 @@ even at one page (`WIDOW_MAX_WORDS`). Those are shortened by
 any lost figure rejects it. Deletion-only is the only form of model-written
 compression anywhere in this project.
 
+## Structural guards
+
+The gates above judge sentences. These judge the document, and they exist
+because a résumé can be wrong in ways no sentence check can see.
+
+- **the rendered document must match the selection.** After writing the .docx,
+  every chosen sentence must be in it (`run._verify_rendered`) and each section
+  must hold exactly as many bullets as were selected
+  (`run._verify_render_counts`). The failure that motivated this: a
+  `base_resume.yaml` covering 2 of a document's 8 bullets produced a four-bullet
+  résumé, and the page measurement reported it as six lines shorter than the
+  baseline and called that a pass.
+- **minimal mode never substitutes.** A section the result does not cover used to
+  fall back to "the first bullet in the database". That is how content went
+  missing quietly. It is now a `SetupError` naming the section.
+- **the setup is validated before the first model call.**
+  `run._validate_inputs` checks `base_resume.yaml` against both the database and
+  the document — ids that do not exist, headings that do not match, sections it
+  forgot. These used to surface at render time, after the paid work, or not at
+  all.
+- **a missing terminal is not an error.** Every prompt goes through `ask.py`,
+  which returns the documented default instead of raising EOFError. A piped or
+  scheduled run used to die at the confirmation step with the expensive calls
+  already spent.
+
+`python run.py doctor` runs the same checks on demand, and reports the
+non-blocking ones too: a `profile.yaml` still holding the example's values, a
+base that lists fewer bullets than the document, a sentence that has drifted
+between the two files.
+
 ## The recruiter pass
 
 `recruiter_review.py` scores the draft the way someone scanning for eight

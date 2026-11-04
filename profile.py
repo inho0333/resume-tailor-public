@@ -185,6 +185,31 @@ class Profile:
             missing.append("style_examples (falling back to generic examples)")
         return missing
 
+    def unedited_fields(self, example=None):
+        """Fields still identical to profile.example.yaml.
+
+        Copying the example and forgetting to edit it is silent, and it is the
+        one mistake this whole file exists to prevent: the prompts would then
+        judge every posting against a fictional person's degree and describe
+        someone else's bullets as your voice. `run.py doctor` turns this into a
+        visible warning.
+        """
+        try:
+            example = example or load(path=EXAMPLE_PATH, required=False)
+        except ProfileError:
+            return []
+        stale = []
+        for field, label in (("name", "name"),
+                             ("school", "education.school"),
+                             ("career_summary", "career_summary"),
+                             ("employers", "employers"),
+                             ("style_examples", "style_examples"),
+                             ("target_roles", "target_roles")):
+            mine, theirs = getattr(self, field), getattr(example, field)
+            if mine and theirs and mine == theirs:
+                stale.append(label)
+        return stale
+
 
 def load(path=None, required=True):
     """Read profile.yaml.

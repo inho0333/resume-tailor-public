@@ -24,6 +24,7 @@ import company_research
 import config
 import confirm_state
 import decisions
+import errors
 import fit_gate
 import genlock
 import jd_extractor
@@ -31,6 +32,7 @@ import keyword_extractor
 import llm_client
 import minimal_tailor
 import pagefit
+import profile as profile_module
 import recruiter_review
 import resume_db
 import resume_parser
@@ -174,9 +176,13 @@ def _finalize_and_send(doc, result, db_sections, company, role, resume_path, jd_
         pass
     else:
         result["sections"] = _clamp_to_caps(result["sections"], config.MAX_BULLETS_PER_SECTION)
-    applied = resume_writer.render_sections(doc, result, db_sections)
+
+    minimal = config.TAILOR_MODE == "minimal"
+    applied = resume_writer.render_sections(doc, result, db_sections,
+                                            allow_db_fallback=not minimal)
 
     _verify_rendered(doc, result, db_sections)
+    _verify_render_counts(result, db_sections, _bullet_counts(doc, db_sections))
 
     out_dir = _company_output_dir(company)
     date_str = datetime.date.today().strftime("%Y%m%d")
@@ -269,10 +275,53 @@ def _verify_rendered(doc, result, db_sections):
             if item["text"].strip() not in rendered:
                 missing.append(f"{section['name']}/{item['id']}")
     if missing:
-        raise RuntimeError(
+        raise errors.SetupError(
             "render check failed — these bullets are not in the document: " +
             ", ".join(missing) +
             " (check the section headers and bullet formatting in your template)")
+
+
+def _bullet_counts(doc, db_sections):
+    """{section name: number of bullet paragraphs} as the document stands."""
+    counts = {}
+    headers = {s["header_text"] for s in db_sections}
+    for section in db_sections:
+        try:
+            _, bullets = resume_writer.find_section_block(
+                doc, section["header_text"], stop_texts=headers)
+        except ValueError:
+            continue
+        counts[section["name"]] = len(bullets)
+    return counts
+
+
+def _verify_render_counts(result, db_sections, after):
+    """The document must hold exactly as many bullets per section as we decided to render.
+
+    `_verify_rendered` proves each chosen sentence is somewhere in the document;
+    this proves nothing extra was left behind and nothing went missing. The
+    failure it exists for: a base_resume.yaml covering 2 of a document's 8
+    bullets produced a four-bullet résumé, and every check still printed PASS —
+    the page measurement even reported the output as six lines shorter than the
+    baseline and called that fine.
+    """
+    wrong = {}
+    for section in db_sections:
+        name = section["name"]
+        expected = len(result.get("sections", {}).get(name, []))
+        if not expected:
+            continue
+        got = after.get(name)
+        if got is not None and got != expected:
+            wrong[name] = (expected, got)
+    if not wrong:
+        return
+    detail = ", ".join(f"{name}: meant to write {want}, document has {got}"
+                       for name, (want, got) in sorted(wrong.items()))
+    raise errors.SetupError(
+        f"the rendered document does not match what was selected ({detail}). This is usually "
+        "a section header or bullet formatting mismatch between your template and "
+        "base_resume.yaml / resume_db.yaml; `python run.py doctor` checks both.")
 
 
 def _enforce_one_page_minimal(out_path, base_docx_path, result, db_sections, report=None,
@@ -322,7 +371,9 @@ def _enforce_one_page_minimal(out_path, base_docx_path, result, db_sections, rep
         if not minimal_tailor.revert_largest(result, base):
             break
         doc = docx.Document(base_docx_path)
-        resume_writer.render_sections(doc, result, db_sections)
+        # Minimal mode throughout: a section the result does not cover is an error,
+        # never a substituted database bullet (see render_sections).
+        resume_writer.render_sections(doc, result, db_sections, allow_db_fallback=False)
         resume_writer.save(doc, out_path)
 
     state = {"available": True, "attempted": True, "pages": pages, "lines": lines,
@@ -385,18 +436,33 @@ def _validate_inputs(resume_path):
     enter any expensive step. Sending an approval request and only failing with "file not
     found" after the user presses the button wastes their time twice."""
     if not resume_path:
-        raise RuntimeError(
+        raise errors.SetupError(
             "no resume template configured — if this is your first run, start with "
             "'python run.py bootstrap --resume <your_resume.docx>' "
             "(or pass --resume on every run)."
         )
     if not os.path.exists(resume_path):
-        raise FileNotFoundError(f"resume file not found: {resume_path}")
+        raise errors.SetupError(f"resume file not found: {resume_path}")
     if not os.path.exists(config.DB_PATH):
-        raise RuntimeError(
+        raise errors.SetupError(
             f"no experience DB at {config.DB_PATH} — run "
             "'python run.py bootstrap --resume <your_resume.docx>' first."
         )
+    if config.TAILOR_MODE != "minimal":
+        return
+    # Minimal mode renders from base_resume.yaml, so a base that does not match the
+    # document is fatal — and it must be caught HERE, before the heavy calls. It used
+    # to surface at render time, after the model work had been paid for, or not at all.
+    if not os.path.exists(minimal_tailor.BASE_YAML_PATH):
+        raise errors.SetupError(
+            f"minimal mode needs {os.path.basename(minimal_tailor.BASE_YAML_PATH)}, which does "
+            "not exist. `python run.py bootstrap --resume <your_resume.docx>` writes it from "
+            "your document, or set `tailor_mode: rebuild` in user_config.yaml.")
+    blocking = [detail for status, detail, _ in _check_base_resume(minimal_tailor.BASE_YAML_PATH)
+                if status == _FAIL]
+    if blocking:
+        raise errors.SetupError(
+            "base_resume.yaml does not match your résumé:\n  - " + "\n  - ".join(blocking))
 
 
 def _send_confirmation_request(company, role, url, eligibility, jd_profile, pending_id,
@@ -514,6 +580,10 @@ def _template_chars_budget(doc, db_sections):
 
 def cmd_tailor(args):
     auto = getattr(args, "auto", False)
+    # Check the setup FIRST. Every one of these problems used to surface after the
+    # posting had been fetched and classified — two model calls spent on a run that
+    # could never finish.
+    _validate_inputs(args.resume or _resume_template_path(config.DEFAULT_RESUME_PATH))
     # Two backends, two different jobs (see llm_client.py). Classification follows
     # --backend; writing the sentences you submit uses the heavy role, which
     # prefers a frontier model and says so when it has to fall back.
@@ -1096,19 +1166,119 @@ def cmd_bootstrap(args):
     with open(config.DB_PATH, "w", encoding="utf-8") as f:
         f.write(DB_HEADER_COMMENT + yaml_body)
 
-    max_bullets_per_section = {s["name"]: len(s["bullets"]) for s in sections}
-    user_config = {"resume_path": resume_path, "max_bullets_per_section": max_bullets_per_section}
-    with open(config.USER_CONFIG_PATH, "w", encoding="utf-8") as f:
-        f.write("# Your settings. Gitignored: never committed, never shared.\n")
-        f.write("# Written by `python run.py bootstrap`. Re-run it when your resume changes.\n")
-        f.write("# See user_config.example.yaml for every key and what it does.\n")
-        yaml.safe_dump(user_config, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    _write_user_config(resume_path, sections)
+    wrote_base = _write_base_resume_draft(resume_path, sections)
 
     total_bullets = sum(len(s["bullets"]) for s in sections)
     print(f"\nDone: wrote {config.DB_PATH} ({total_bullets} bullets) and "
           f"{config.USER_CONFIG_PATH}.")
-    print("You can now run:")
-    print('  .venv/bin/python run.py tailor --url "<JD URL>" --company "Acme" --role "Summer Associate"')
+    print("\nNext:")
+    print(f"  1. open {os.path.basename(config.DB_PATH)} and fill in each bullet's `context` — "
+          "it is the background a rewrite draws on AND the list of numbers the tool is "
+          "allowed to use. See resume_db.example.yaml.")
+    if wrote_base:
+        print(f"  2. check {os.path.basename(minimal_tailor.BASE_YAML_PATH)} — it was written "
+              "from your document, so it lists every bullet your resume shows. Remove any "
+              "line you do not want treated as approved.")
+    else:
+        print(f"  2. {os.path.basename(minimal_tailor.BASE_YAML_PATH)} already existed and was "
+              "left alone.")
+    print("  3. .venv/bin/python run.py doctor")
+    print("  4. .venv/bin/python run.py tailor --jd-file posting.txt --company \"Acme\" "
+          "--role \"Product Manager Intern\"")
+
+
+def _write_user_config(resume_path, sections):
+    """Update user_config.yaml **without throwing away what is already in it**.
+
+    Bootstrap used to write the file from scratch, which silently deleted every
+    other setting — `base_resume_path`, `tailor_mode`, the backend choice. A user
+    following the setup guide in order (write user_config, then bootstrap) lost
+    all of it and then found minimal mode refusing to run. Now only the two keys
+    bootstrap actually derives are touched, and the previous file is kept as a
+    .bak so nothing is unrecoverable.
+    """
+    derived = {
+        "resume_path": resume_path,
+        "max_bullets_per_section": {s["name"]: len(s["bullets"]) for s in sections},
+    }
+    existing = {}
+    if os.path.exists(config.USER_CONFIG_PATH):
+        with open(config.USER_CONFIG_PATH, "r", encoding="utf-8") as f:
+            existing = yaml.safe_load(f) or {}
+        backup = config.USER_CONFIG_PATH + ".bak"
+        shutil.copy2(config.USER_CONFIG_PATH, backup)
+        kept = [k for k in existing if k not in derived]
+        print(f"\nUpdated {os.path.basename(config.USER_CONFIG_PATH)}: set resume_path and "
+              f"max_bullets_per_section, kept your other {len(kept)} setting(s)"
+              + (f" ({', '.join(sorted(kept))})" if kept else "")
+              + f". Previous file saved as {os.path.basename(backup)}.")
+    else:
+        # First run: point minimal mode at the same document, so the default mode
+        # works without a second edit. Both keys are yours to change afterwards.
+        derived["base_resume_path"] = resume_path
+        derived["tailor_mode"] = "minimal"
+
+    merged = {**existing, **derived}
+    with open(config.USER_CONFIG_PATH, "w", encoding="utf-8") as f:
+        f.write("# Your settings. Gitignored: never committed, never shared.\n")
+        f.write("# `python run.py bootstrap` sets resume_path and max_bullets_per_section;\n")
+        f.write("# every other key here is yours and is preserved across re-runs.\n")
+        f.write("# See user_config.example.yaml for every key and what it does.\n")
+        yaml.safe_dump(merged, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+BASE_HEADER_COMMENT = """\
+# base_resume.yaml — the résumé you have already approved, as data.
+#
+# Written by `run.py bootstrap` from your own document, so it starts out as an
+# exact copy of what your résumé shows today. Minimal mode treats every sentence
+# here as the quality floor: an edit that fails validation is discarded and the
+# sentence below is what ships.
+#
+# Review it once:
+#   - remove any line you do not want treated as approved
+#   - keep each `text` identical to resume_db.yaml and to the document itself
+#     (the same sentence in three places is how drift gets detected)
+#   - keep each `header_text` identical to the heading in the .docx, character
+#     for character, or the renderer cannot find the section
+#
+# Gitignored: this is your career data and is never committed.
+
+"""
+
+
+def _write_base_resume_draft(resume_path, sections):
+    """Write base_resume.yaml from the parsed document. Returns True if written.
+
+    Minimal mode is the default and cannot run without this file, and the setup
+    guide used to say "write it by hand" — every `header_text` matching a .docx
+    paragraph character for character, every id matching the database. Bootstrap
+    has just parsed that exact document, so it can produce a correct file for
+    free, and a hand-made one was the main source of "header not found" errors.
+
+    An existing file is never overwritten: it holds decisions about which bullets
+    are approved, which bootstrap cannot know.
+    """
+    path = minimal_tailor.BASE_YAML_PATH
+    if os.path.exists(path):
+        return False
+    base = {
+        "source_docx": resume_path,
+        "sections": [
+            {
+                "name": s["name"],
+                "header_text": s["header_text"],
+                "bullets": [{"id": b["id"], "text": b["text"]} for b in s["bullets"]],
+            }
+            for s in sections
+        ],
+    }
+    body = yaml.safe_dump(base, allow_unicode=True, sort_keys=False,
+                          default_flow_style=False, width=100000)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(BASE_HEADER_COMMENT + body)
+    return True
 
 
 # ── doctor ──────────────────────────────────────────────────────────────────
@@ -1121,6 +1291,104 @@ def _line(status, label, detail=""):
     return status
 
 
+def _check_base_resume(base_yaml):
+    """Validate base_resume.yaml against the database and the document.
+
+    The two rules base_resume.example.yaml calls hard errors — every id exists in
+    the database, every header_text matches a .docx heading character for
+    character — used to be checked nowhere. They surfaced as a render failure
+    after the expensive calls had run, or worse: a base listing fewer bullets
+    than the document produced a shorter résumé that every check called PASS.
+
+    Returns a list of (status, detail, fix) rows.
+    """
+    rows = []
+    try:
+        base = minimal_tailor.load_base(base_yaml)
+    except Exception as e:
+        return [(_FAIL, f"will not load: {e}", "compare against base_resume.example.yaml")]
+
+    base_sections = base.get("sections", [])
+    pinned = sum(len(sec.get("bullets", [])) for sec in base_sections)
+
+    # rule 1: every id exists in the database
+    try:
+        db_sections = resume_db.load_db(config.DB_PATH)
+    except Exception:
+        db_sections = None
+    if db_sections is not None:
+        db_ids = {b["id"] for sec in db_sections for b in sec["bullets"]}
+        unknown = [b["id"] for sec in base_sections for b in sec.get("bullets", [])
+                   if b["id"] not in db_ids]
+        if unknown:
+            rows.append((_FAIL, f"{len(unknown)} id(s) are not in resume_db.yaml: "
+                                + ", ".join(unknown[:4]),
+                         "fix the ids, or add those bullets to resume_db.yaml"))
+        # drift: the same sentence is meant to be in both files
+        db_text = {b["id"]: b["text"].strip() for sec in db_sections for b in sec["bullets"]}
+        drifted = [b["id"] for sec in base_sections for b in sec.get("bullets", [])
+                   if b["id"] in db_text and b["text"].strip() != db_text[b["id"]]]
+        if drifted:
+            rows.append((_WARN, f"{len(drifted)} sentence(s) differ from resume_db.yaml: "
+                                + ", ".join(drifted[:4]),
+                         "make the text identical in both files, or the baseline is a lie"))
+
+    # rule 2: every header_text is a heading in the document
+    docx_path = config.BASE_RESUME_PATH or base.get("source_docx")
+    if docx_path and os.path.exists(docx_path):
+        try:
+            doc = docx.Document(docx_path)
+        except Exception as e:
+            doc = None
+            rows.append((_WARN, f"could not open {docx_path}: {e}", "check base_resume_path"))
+        if doc is not None:
+            paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            para_set = set(paragraphs)
+            for sec in base_sections:
+                header = (sec.get("header_text") or "").strip()
+                if header in para_set:
+                    continue
+                near = [t for t in paragraphs if t.startswith(header[:12])] if header else []
+                hint = f"; the document has {near[0]!r}" if near else ""
+                rows.append((_FAIL,
+                             f"header_text {header!r} is not a heading in the document{hint}",
+                             "copy the heading out of the .docx and paste it in — the match "
+                             "is character for character"))
+            # content loss: a section listing fewer bullets than the document shows
+            headers = {sec.get("header_text") for sec in base_sections}
+            for sec in base_sections:
+                header = (sec.get("header_text") or "").strip()
+                if header not in para_set:
+                    continue
+                try:
+                    _, doc_bullets = resume_writer.find_section_block(
+                        doc, header, stop_texts=headers)
+                except ValueError:
+                    continue
+                listed, actual = len(sec.get("bullets", [])), len(doc_bullets)
+                if listed < actual:
+                    rows.append((_WARN,
+                                 f"section {sec.get('name')!r} lists {listed} of the "
+                                 f"{actual} bullets in the document",
+                                 "add the missing bullets, or the tailored résumé will be "
+                                 "shorter than the one you approved"))
+
+    # a section the base does not mention renders nothing, which minimal mode treats
+    # as a broken file rather than an instruction to drop a job
+    if db_sections is not None:
+        covered = {(sec.get("name") or "").strip() for sec in base_sections}
+        uncovered = [s["name"] for s in db_sections if s["name"] not in covered]
+        if uncovered:
+            rows.append((_FAIL,
+                         "no entry for section(s) " + ", ".join(uncovered),
+                         "add them (bootstrap writes the file from your document), or remove "
+                         "them from resume_db.yaml if they are no longer on your résumé"))
+
+    if not rows:
+        rows.append((_OK, f"{pinned} bullets pinned, ids and headings all match", ""))
+    return rows
+
+
 def cmd_doctor(args):
     """Check everything this tool needs, and say exactly what to do about what
     is missing. Run it after setup, and again whenever something behaves oddly:
@@ -1128,8 +1396,6 @@ def cmd_doctor(args):
     rather than an error.
     """
     import importlib
-
-    import profile as profile_module
 
     failures, warnings = [], []
 
@@ -1161,10 +1427,19 @@ def cmd_doctor(args):
                "cp profile.example.yaml profile.yaml, then fill it in")
     else:
         missing = prof.missing_fields()
-        record(_WARN if missing else _OK, "profile.yaml",
-               ("incomplete: " + ", ".join(missing)) if missing else
-               f"{prof.program or 'degree'} / graduating {prof.graduation or '?'}",
-               "fill in the listed fields in profile.yaml")
+        stale = prof.unedited_fields()
+        if stale:
+            # The quiet failure this catches: the example copied and never edited.
+            # Every prompt would then judge postings against a fictional person.
+            record(_WARN, "profile.yaml",
+                   "still has profile.example.yaml's values for: " + ", ".join(stale),
+                   "edit those fields in profile.yaml — they are describing someone who "
+                   "does not exist")
+        else:
+            record(_WARN if missing else _OK, "profile.yaml",
+                   ("incomplete: " + ", ".join(missing)) if missing else
+                   f"{prof.program or 'degree'} / graduating {prof.graduation or '?'}",
+                   "fill in the listed fields in profile.yaml")
 
     if not os.path.exists(config.USER_CONFIG_PATH):
         record(_FAIL, "user_config.yaml", "missing",
@@ -1210,16 +1485,11 @@ def cmd_doctor(args):
     if config.TAILOR_MODE == "minimal":
         if not os.path.exists(base_yaml):
             record(_FAIL, "base_resume.yaml", "missing — minimal mode cannot run",
-                   "write it by hand from base_resume.example.yaml (bootstrap does not "
-                   "generate it): each header_text must match your .docx exactly")
+                   "run `python run.py bootstrap --resume <your_resume.docx>`, which writes "
+                   "it from your document")
         else:
-            try:
-                base = minimal_tailor.load_base(base_yaml)
-                n = sum(len(sec.get("bullets", [])) for sec in base.get("sections", []))
-                record(_OK, "base_resume.yaml", f"{n} bullets pinned")
-            except Exception as e:
-                record(_FAIL, "base_resume.yaml", f"will not load: {e}",
-                       "compare against base_resume.example.yaml")
+            for status, detail, fix in _check_base_resume(base_yaml):
+                record(status, "base_resume.yaml", detail, fix)
 
     print("\nLLM backends")
     availability = llm_client.available_backends()
@@ -1402,7 +1672,15 @@ def main():
     p_dec.set_defaults(func=cmd_decisions)
 
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except (errors.SetupError, profile_module.ProfileError,
+            llm_client.BackendUnavailable) as e:
+        # Setup problems are the user's to fix, so they get a sentence, not a stack
+        # trace. Everything else keeps its traceback: that is a bug worth reporting.
+        print(f"\n{e}", file=sys.stderr)
+        print("\nRun `.venv/bin/python run.py doctor` to check the setup.", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

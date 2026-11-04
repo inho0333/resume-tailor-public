@@ -45,6 +45,7 @@ nothing leaves the machine at all. See [Privacy](#privacy).
 - invent numbers. A figure that appears in a rewritten sentence but not in your database is treated as fabrication and the edit is discarded.
 - rewrite your sentences from scratch in the default mode. It swaps words and whole bullets; it does not re-author your voice.
 - keep a worse version. Every gate's failure mode is "keep what you already approved".
+- lose content. If the rendered document does not contain exactly what was selected, the run stops instead of handing you a shorter résumé.
 
 ## Quick start
 
@@ -57,8 +58,8 @@ cp user_config.example.yaml user_config.yaml  # where your files are
 .venv/bin/python run.py doctor                # what is still missing
 ```
 
-Then follow [SETUP.md](SETUP.md), which walks through the two files above,
-generating `resume_db.yaml` from your .docx, and writing `base_resume.yaml`.
+Then follow [SETUP.md](SETUP.md), which walks through the two files above and
+generates `resume_db.yaml` and `base_resume.yaml` from your .docx.
 
 Once set up:
 
@@ -174,7 +175,7 @@ twin whose comments are the real documentation.
 | `profile.yaml` | degree, graduation, work authorisation, target roles, and two or three of your own bullets as a style reference | copy `profile.example.yaml` |
 | `user_config.yaml` | paths, mode, per-section bullet caps, backend choice | `run.py bootstrap`, then edit |
 | `resume_db.yaml` | **every** bullet you could ever use, with the context and the allowed numbers behind each one | `run.py bootstrap --resume your.docx`, then hours of your own writing |
-| `base_resume.yaml` | which bullets your approved résumé actually shows, keyed to the headings in the .docx | by hand — `bootstrap` does not generate it |
+| `base_resume.yaml` | which bullets your approved résumé actually shows, keyed to the headings in the .docx | `run.py bootstrap` writes it from your document; you review it once |
 
 `resume_db.yaml` is where output quality comes from. Each bullet's `context`
 field is both the background the model rewrites from and **the list of numbers it
@@ -221,8 +222,9 @@ Built for one person's job search, then generalised. Expect rough edges:
   else is cross-platform, but the measurement fallback is an estimate.
 - `bootstrap` parses a résumé with `EXPERIENCE` section headings and
   `Company, City` header lines. A different layout will need the parser adjusted.
-- `base_resume.yaml` is hand-written, and every `header_text` must match the
-  .docx paragraph character for character.
+- every `header_text` in `base_resume.yaml` must match its .docx paragraph
+  character for character. Bootstrap gets this right; a document edited
+  afterwards can drift, which is what `doctor` checks.
 - The unattended approval loop (Telegram + launchd) is the least portable part.
 
 MIT licensed. Issues and patches welcome.

@@ -123,8 +123,13 @@ Under "LLM backends", at least one line should say `available`, and both
 cp profile.example.yaml profile.yaml
 ```
 
-Open it and replace every value. The comments in the file say what each field is
-for and what goes wrong when it is wrong; the ones that matter most:
+Open it and replace every value — and do replace them: `doctor` reports any field
+still carrying the example's value, because a profile left as "Jane Doe of
+Example University" silently makes every judgment about a person who does not
+exist.
+
+The comments in the file say what each field is for and what goes wrong when it
+is wrong; the ones that matter most:
 
 - **`education.program`** — written the way postings write it (`MBA`, `MS
   Computer Science`). This string goes into the eligibility prompt verbatim.
@@ -167,11 +172,15 @@ move.
 
 ## 5. `user_config.yaml` — paths and modes
 
+You can skip this step: `bootstrap` (next) writes the file for you, pointing both
+paths at the document you give it. Do it only if you want to change something
+first, or read it afterwards to see what bootstrap chose.
+
 ```bash
 cp user_config.example.yaml user_config.yaml
 ```
 
-Set at minimum:
+The three keys that matter:
 
 ```yaml
 resume_path: /Users/you/Documents/Your_Resume.docx
@@ -179,9 +188,11 @@ base_resume_path: /Users/you/Documents/Your_Resume.docx   # usually the same fil
 tailor_mode: minimal
 ```
 
-`tailor_mode: minimal` is the default and the mode worth using. It needs
-`base_resume.yaml` (step 8). Until that exists, `rebuild` is the mode that runs,
-and its output is worse — this is a stop on the way, not a destination.
+`tailor_mode: minimal` is the default and the mode worth using.
+
+Editing this before bootstrap is safe: bootstrap only sets `resume_path` and
+`max_bullets_per_section`, keeps every other key you wrote, and saves the
+previous file as `user_config.yaml.bak`.
 
 ---
 
@@ -191,18 +202,22 @@ and its output is worse — this is a stop on the way, not a destination.
 .venv/bin/python run.py bootstrap --resume /Users/you/Documents/Your_Resume.docx
 ```
 
-This parses your .docx and writes two files:
+This parses your .docx and writes three files:
 
 - **`resume_db.yaml`** — one entry per bullet it found, with `id`, `text` and
   rough tags
+- **`base_resume.yaml`** — the approved résumé as data: every bullet your
+  document shows, with the headings copied out of it exactly (step 8 is now a
+  review rather than an hour of transcription)
 - **`user_config.yaml`** — `resume_path` plus the per-section bullet caps it
-  counted (those counts are what made your résumé fit on one page)
+  counted (those counts are what made your résumé fit on one page), merged into
+  whatever you had already set
+
+An existing `base_resume.yaml` is never overwritten: it records which bullets you
+consider approved, which bootstrap cannot know.
 
 If it cannot find your sections, it says so: check that the heading paragraph is
 exactly `EXPERIENCE`, or pass `--section-heading "WORK EXPERIENCE"`.
-
-> `bootstrap` overwrites `user_config.yaml`. If you had already edited it, copy
-> your values back afterwards — or run bootstrap first and edit second.
 
 ---
 
@@ -235,25 +250,23 @@ interview that surfaces a story you had not written down.
 
 ---
 
-## 8. `base_resume.yaml` — by hand
+## 8. `base_resume.yaml` — review what bootstrap wrote
 
-**Bootstrap does not generate this, and minimal mode cannot run without it.**
+Minimal mode renders from this file, so it decides what your tailored résumé
+contains. Bootstrap wrote it from your document, which means it starts out
+correct; open it once and **remove any line you do not want treated as
+approved**.
 
-```bash
-cp base_resume.example.yaml base_resume.yaml
-```
-
-It lists which bullets your approved résumé actually shows, in order, per
-section. Two rules, both hard errors:
+Two rules hold it together, and both are hard errors:
 
 1. every `id` must exist in `resume_db.yaml`
 2. every `header_text` must match the heading paragraph in your .docx
    **character for character** — same spelling, punctuation, capitalisation.
    The renderer finds the section by string match.
 
-The sentence under each `id` should be identical to the `text` in
-`resume_db.yaml` and to what is in the .docx today. The same sentence in three
-places is deliberate: it is how drift gets detected.
+The sentence under each `id` should stay identical to the `text` in
+`resume_db.yaml` and to what is in the .docx. The same sentence in three places
+is deliberate: it is how drift gets detected.
 
 Check:
 
@@ -261,7 +274,11 @@ Check:
 .venv/bin/python run.py doctor
 ```
 
-"Your files" should now be all `ok`.
+`doctor` verifies both rules against your actual document and database — a
+mismatched heading, an id that does not exist, a section the file forgot, a
+sentence that has drifted. It also tells you when the file lists fewer bullets
+than the document, which is allowed but means your tailored résumé will be
+shorter than the one you approved. "Your files" should now be all `ok`.
 
 ---
 
@@ -364,9 +381,9 @@ digest schedule, and what to do when the listener goes quiet.
 | `profile.yaml not found` | step 3 not done | `cp profile.example.yaml profile.yaml` and fill it in |
 | `No LLM backend is available` | no CLI, no key, no local model | step 2; `doctor` lists every option |
 | `FileNotFoundError` on a .docx | `resume_path` / `base_resume_path` wrong or moved | fix `user_config.yaml`, then `doctor` |
-| minimal mode refuses to run | `base_resume.yaml` missing | step 8 — it is not generated for you |
-| `header_text ... not found` | a heading differs from the .docx by a character | copy the heading out of the document and paste it in |
-| `id ... not in resume_db.yaml` | `base_resume.yaml` references a bullet that does not exist | fix the id, or add the bullet to the database |
+| minimal mode refuses to run | `base_resume.yaml` missing | re-run `bootstrap`, which writes it from your document |
+| `base_resume.yaml does not match your résumé` | a heading differs by a character, an id does not exist, or a section is missing from the file | `doctor` lists each one with the fix; the run stops before spending anything |
+| `the rendered document does not match what was selected` | your template's section headings or bullet formatting changed under the database | `doctor`, then check the headings in the .docx |
 | every proposed edit is rejected | the model is proposing rewrites, not edits | expected, and the point. The report says which rule each one hit; your original ships |
 | zero swaps, and the report says so | nothing in the database matched this posting better | add the missing experience to `resume_db.yaml` |
 | page count "could not be measured" | no Word, or the access dialog is waiting | step 9, or accept the estimate |
