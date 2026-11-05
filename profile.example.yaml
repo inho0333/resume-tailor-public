@@ -129,9 +129,9 @@ avoid_roles: []
 style_examples:
   - >-
     Migrated billing from a monthly to a weekly cycle for 12,000 merchants,
-    after churn interviews showed payout speed was the top reason for leaving,
-    by modelling the working-capital impact and rebuilding settlement to carry
-    corrections forward, cutting merchant churn 18%
+    after churn interviews showed payout speed drove attrition, by modelling the
+    working-capital impact and rebuilding settlement to carry corrections,
+    cutting merchant churn 18%
   - >-
     Launched a self-service returns flow after support logs showed 60% of
     tickets were one of three questions, coordinating support, logistics and two

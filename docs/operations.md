@@ -24,6 +24,10 @@ Running it day to day, and running it unattended.
 # send the queued approval requests now, instead of at the next digest hour
 .venv/bin/python run.py digest
 
+# what is waiting for approval, and build or skip one without Telegram
+.venv/bin/python run.py pending
+.venv/bin/python run.py pending --make 5d96906653
+
 # what you have approved, skipped, or let expire
 .venv/bin/python run.py decisions --limit 20
 
@@ -40,8 +44,20 @@ Running it day to day, and running it unattended.
 Interactive `tailor` stops for you at most twice: once to ask about gaps the
 posting wants and your database cannot evidence (Enter skips), and once to show
 the planned edit before writing the file (`n` cancels, writing nothing).
-`--auto` skips both — gaps go into the notification unanswered, and the draft is
-written.
+
+`--auto` is a different shape, not just a quieter one: it runs the light-backend
+steps (eligibility, posting profile, keywords, fit), **queues the posting, and
+stops**. No research, no rewrite, no .docx — those cost minutes and model quota,
+and they only start when you approve:
+
+```bash
+.venv/bin/python run.py pending              # what is queued, with the fit tier
+.venv/bin/python run.py pending --make <id>  # build it (same code path as ✅)
+.venv/bin/python run.py pending --skip <id>  # pass on it (recorded in the journal)
+```
+
+Pressing ✅ in Telegram does exactly what `--make` does. Telegram is the
+convenience, not the mechanism.
 
 ## What a run produces
 
@@ -145,9 +161,9 @@ Three settings in `user_config.yaml` shape this:
 - **`confirm_ttl_days: 7`** — each pending record holds a whole posting, and a
   three-week-old posting has usually closed.
 - **`prefit_ask_min_tier: mid`** — postings judged below this get a single
-  "draft it anyway" button rather than an approve/skip pair. Measured: of 87
-  approval requests, 13 were answered, and 43 of the expiries were roles that
-  were never going to be applied to.
+  "draft it anyway" button rather than an approve/skip pair. In the log that
+  shaped this setting, most low-tier requests expired unanswered: they were roles
+  that were never going to be applied to, and each one still cost a message.
 
 Every button press and every expiry goes into `state/decisions.jsonl`, and
 `fit_gate` feeds that history back into the next fit judgment as examples. The
@@ -188,7 +204,8 @@ separate one-time command.
 
 | symptom | first thing to check |
 |---|---|
-| nothing happens on a button press | is `bot_listener.py` running? `launchctl list \| grep confirm` |
+| nothing happens on a button press | is `bot_listener.py` running? `launchctl list \| grep confirm` — or skip the bot: `run.py pending --make <id>` |
+| `--auto` finished and there is no draft | that is the approval gate. `run.py pending` lists it |
 | a fix you made is not taking effect | the daemon is holding old code — `kickstart`, and check `heartbeat.ts` moved |
 | drafts stopped arriving | `tail logs/bot_listener.log`; then `run.py doctor` |
 | every edit is rejected | expected. The report names the rule each one hit; the baseline ships |

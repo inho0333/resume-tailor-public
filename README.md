@@ -10,7 +10,7 @@ It will not invent a number, rewrite your sentences into recruiter-speak, or
 submit anything anywhere. When an edit cannot pass the checks, the original
 sentence stays.
 
-> **New here? Go to [SETUP.md](SETUP.md).** It takes about 40 minutes, and
+> **New here? Go to [SETUP.md](SETUP.md).** Half an hour to a first draft, and
 > `python run.py doctor` tells you what is still missing at any point.
 
 ## What you need, cost first
@@ -21,7 +21,7 @@ sentence stays.
 | **macOS + Microsoft Word** | Only for the page-count guarantee. Word is driven by AppleScript to measure the real page count. Without it you still get drafts; the page count becomes an estimate that can be wrong at the boundary. LibreOffice is not a substitute (no Calibri, so even a correct one-page file renders as two). |
 | **Python 3.10+** | 3.14 is what it is developed against. |
 | **Your résumé, as a one-page .docx** | Everything is rendered from this file: its fonts, margins and bullet formatting are the output's. |
-| **About 40 minutes of setup** | Most of it writing down your own experience in `resume_db.yaml`, which is the part that determines output quality. |
+| **An evening** | About 20 minutes of installing and pointing at files, then an hour or two writing down your own experience in `resume_db.yaml` — that part is what determines output quality, and you keep adding to it. |
 | *Optional:* a Telegram bot | Only to approve or skip postings from your phone. The CLI works without it. |
 
 Nothing is sent anywhere except to the LLM backend you choose. With Ollama,
@@ -50,16 +50,22 @@ nothing leaves the machine at all. See [Privacy](#privacy).
 ## Quick start
 
 ```bash
-git clone <this repo> && cd resume-tailor
+git clone https://github.com/inho0333/resume-tailor-public.git resume-tailor
+cd resume-tailor
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-cp profile.example.yaml profile.yaml          # who you are
-cp user_config.example.yaml user_config.yaml  # where your files are
-.venv/bin/python run.py doctor                # what is still missing
+cp profile.example.yaml profile.yaml   # who you are
+.venv/bin/python run.py doctor         # what is still missing
 ```
 
-Then follow [SETUP.md](SETUP.md), which walks through the two files above and
-generates `resume_db.yaml` and `base_resume.yaml` from your .docx.
+Then follow [SETUP.md](SETUP.md), which walks through `profile.yaml` and has
+`bootstrap` generate `user_config.yaml`, `resume_db.yaml` and `base_resume.yaml`
+from your .docx.
+
+No résumé in the shape this expects? `templates/resume_template.docx` is one —
+a one-page layout with the `EXPERIENCE` heading, `Company, City` header lines
+and bulleted achievements the renderer needs. Point `bootstrap` at it to watch
+the whole pipeline run before your own career data is involved.
 
 Once set up:
 
@@ -72,6 +78,10 @@ Once set up:
 
 # score an existing draft like a recruiter would
 .venv/bin/python run.py review --company "Acme" --role "Product Manager Intern"
+
+# postings queued by --auto, and building one without Telegram
+.venv/bin/python run.py pending
+.venv/bin/python run.py pending --make <id>
 
 # check the setup, and optionally send one real prompt through each backend
 .venv/bin/python run.py doctor --probe
@@ -112,9 +122,9 @@ because prompt instructions alone did not hold.
 The failure that set the design: a pipeline that rewrote every bullet for every
 posting produced lines like
 
-> Built a bottom-up model at a $500M AUM firm sizing customers x willingness-to-pay
+> Built a bottom-up model at a $200M AUM firm sizing customers x willingness-to-pay
 > (labor saved, spend on alternatives) x capture rate, held to ~20%/~5% vs 60-70%
-> claims; invested $4.2M across 40 companies (18 AI-driven), 7 with follow-on.
+> claims; invested $12.4M across 28 companies (9 AI-driven), 6 with follow-on.
 
 Unreadable, and the *why* and the *impact* are gone. The cause is structural:
 compressing facts into a character budget rewards telegraphic notation, and a
@@ -132,6 +142,8 @@ What the validators enforce, on every proposed edit:
 - **no borrowed nouns** — a proper noun or product name the original did not contain is rejected (acronyms are fine)
 - **swap style caps** — a replacement bullet must stay inside your own résumé's shape for that section: at most 3 commas, 1 semicolon, 1 parenthesis, no more words than the section's longest bullet, and at least one number kept
 - **no duplicated experience** — a bullet sharing two or more figures with one that is staying is the same story twice, and is rejected
+- **a swap must bring in a different bullet** — swapping a bullet for itself would let a base sentence be rewritten under the looser swap rules, which is how one lost its *why* and *how* clauses and still passed every gate
+- **plain hyphens only** — a non-breaking hyphen looks right in Word and breaks in a plain-text ATS field, so look-alike characters are normalised away before validation and rejected if they survive it
 - **retired experience never returns** — a bullet marked `retired: true` cannot reach the résumé through any path, and a test holds that shut
 - **protected lines** — the Skills and Languages lines are never reordered or reworded
 - **one page, measured** — spillover is fixed by reverting edits, not by compressing sentences. Since your original fits on one page, reverting always converges.
@@ -177,6 +189,11 @@ twin whose comments are the real documentation.
 | `resume_db.yaml` | **every** bullet you could ever use, with the context and the allowed numbers behind each one | `run.py bootstrap --resume your.docx`, then hours of your own writing |
 | `base_resume.yaml` | which bullets your approved résumé actually shows, keyed to the headings in the .docx | `run.py bootstrap` writes it from your document; you review it once |
 
+A fifth file is committed, and is not about you: `templates/resume_template.docx`,
+a standard one-page layout in the shape the parser and the renderer expect. Start
+from it if your own résumé is written as paragraphs, or point `bootstrap` at it to
+watch a full run before your own career data is involved.
+
 `resume_db.yaml` is where output quality comes from. Each bullet's `context`
 field is both the background the model rewrites from and **the list of numbers it
 is allowed to use** — a figure that is not there cannot appear in your résumé.
@@ -220,8 +237,10 @@ Built for one person's job search, then generalised. Expect rough edges:
 
 - macOS-only for the page-count guarantee (Word via AppleScript). Everything
   else is cross-platform, but the measurement fallback is an estimate.
-- `bootstrap` parses a résumé with `EXPERIENCE` section headings and
-  `Company, City` header lines. A different layout will need the parser adjusted.
+- `bootstrap` parses a résumé with an `EXPERIENCE` section heading and
+  `Company, City` header lines, with bulleted achievements under each. A different
+  layout will need the parser adjusted; `templates/resume_template.docx` is a
+  document in the expected shape.
 - every `header_text` in `base_resume.yaml` must match its .docx paragraph
   character for character. Bootstrap gets this right; a document edited
   afterwards can drift, which is what `doctor` checks.

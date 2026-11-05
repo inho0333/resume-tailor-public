@@ -81,7 +81,7 @@ narrative.
 
 
 SELECT_PROMPT_TEMPLATE = """\
-You are a career coach assembling an MBA internship applicant's résumé for one specific job
+You are a career coach assembling {applicant_phrase}'s résumé for one specific job
 posting (JD). Right now you are at the stage of **choosing which experiences go on the page**
 — rewriting the sentences happens in the next stage.
 
@@ -150,7 +150,7 @@ they are explanations a person reads, and gaps are surfaced verbatim in a notifi
 
 
 REWRITE_PROMPT_TEMPLATE = """\
-You are a career coach polishing an MBA internship applicant's résumé for one specific job
+You are a career coach polishing {applicant_phrase}'s résumé for one specific job
 posting (JD). Which bullets go on the page has already been decided — your job is to
 **rewrite every one of the [Bullets to rewrite] below, one by one**.
 
@@ -403,6 +403,7 @@ def select_bullets(backend, jd_profile, db_sections, keyword_counts=None, max_pe
     track = (jd_profile or {}).get("track")
 
     prompt = SELECT_PROMPT_TEMPLATE.format(
+        applicant_phrase=profile_module.get().applicant_phrase,
         jd_profile_json=json.dumps(jd_profile, ensure_ascii=False, indent=2),
         track_guidance=TRACK_GUIDANCE.get(track, TRACK_GUIDANCE["General"]),
         keyword_blob=keyword_extractor.format_for_prompt(keyword_counts or []),
@@ -476,6 +477,7 @@ def rewrite_bullets(backend, jd_profile, db_sections, selected, keyword_counts=N
 
     track = (jd_profile or {}).get("track")
     prompt = REWRITE_PROMPT_TEMPLATE.format(
+        applicant_phrase=profile_module.get().applicant_phrase,
         reference_style_blob=reference_style_blob(),
         jd_profile_json=json.dumps(jd_profile, ensure_ascii=False, indent=2),
         track_guidance=TRACK_GUIDANCE.get(track, TRACK_GUIDANCE["General"]),
@@ -596,7 +598,7 @@ def format_review(result, db_sections):
     for section in db_sections:
         name = section["name"]
         items = result.get("sections", {}).get(name, [])
-        lines.append(f"\n[{name}] {len(items)} bullets")
+        lines.append(f"\n[{name}] {len(items)} bullet{'' if len(items) == 1 else 's'}")
         for item in items:
             lines.append(f"  - ({item['id']}) {item['text']}")
 

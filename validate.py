@@ -42,6 +42,8 @@ from pathlib import Path
 import docx
 from docx.oxml.ns import qn
 
+import llm_utils
+
 # ── Calibration (tune these) ─────────────────────────────────────────────────
 CHARS_PER_LINE_AT_11PT = 95  # Estimated chars per 11pt line at full width. Unverified.
 LINE_HEIGHT_TWIPS = 240      # One line at single spacing (twips), close to most body text.
@@ -201,6 +203,17 @@ def validate_docx(path, baseline_path=None):
         fail("found a double dash (--) — probably a typo, check it")
     else:
         ok("no double dash")
+
+    # Look-alike characters: a non-breaking hyphen renders correctly in Word and then breaks
+    # when the text is pasted into a plain-text ATS field. The en dash is included here rather
+    # than in the em dash check so the message can name the character.
+    exotic = sorted({ch for ch in full_text if ch in llm_utils.NON_ASCII_DASHES and ch != "—"})
+    if exotic:
+        fail("found a non-ASCII dash/hyphen "
+             f"({', '.join('U+%04X' % ord(ch) for ch in exotic)}) — it looks right in Word and "
+             "breaks in a plain-text paste. Replace it with a plain hyphen")
+    else:
+        ok("no look-alike hyphen")
 
     fonts_found = set()
     for p in paragraphs:

@@ -49,7 +49,7 @@ spending model calls on postings you would not apply to.
   ┌───────────────────────────────────────────────────────────┐
   │ company_research.research_company   red flags, vocabulary │ HEAVY
   │ minimal_tailor.run                  plan the edit         │ HEAVY
-  │   └─ check_text / check_swap        apply the plan        │ code  ← most edits die here
+  │   └─ apply_plan / check_text        validate the plan     │ code  ← most edits die here
   │ recruiter_review.run                score it, object      │ HEAVY
   │ resume_writer.render_sections       write the .docx       │ code
   │ pagefit / validate                  measure, revert       │ code
@@ -69,7 +69,7 @@ in what you send.
 
 | file | role |
 |---|---|
-| `run.py` | the CLI: `tailor`, `bootstrap`, `polish`, `review`, `digest`, `doctor`, `decisions`. Orchestration lives here and only here. |
+| `run.py` | the CLI: `tailor`, `bootstrap`, `polish`, `review`, `digest`, `pending`, `doctor`, `decisions`. Orchestration lives here and only here. |
 | `bot_listener.py` | long-polls Telegram for approve/skip presses. Optional. |
 | `pagefit.py` | also a CLI (`pagefit.py --grant`, `pagefit.py file.docx`) for the Word measurement. |
 | `validate.py` | also a CLI, for checking a generated .docx against the template. |
@@ -78,7 +78,7 @@ in what you send.
 
 | file | role |
 |---|---|
-| `profile.py` | loads `profile.yaml` and turns it into prompt fragments (`applicant_block`, `eligibility_block`, `style_blob`) and role-matching patterns. **The only place the pipeline may state a fact about you.** |
+| `profile.py` | loads `profile.yaml` and turns it into prompt fragments (`applicant_block`, `eligibility_block`, `style_blob`, `applicant_phrase`) and role-matching patterns. **The only place the pipeline may state a fact about you** — including how the rewrite, review and polish prompts name you, which used to be the literal string "an MBA internship applicant". |
 | `config.py` | paths, modes, thresholds. Personal values come from `user_config.yaml`; nothing personal is hardcoded, and nothing has a personal default. |
 
 ### Understanding a posting
@@ -104,6 +104,7 @@ in what you send.
 
 | file | role |
 |---|---|
+| `templates/make_template.py` | writes `templates/resume_template.docx`, a résumé in the layout the parser and the renderer expect. Edit the script, not the .docx. |
 | `resume_parser.py` | reads a .docx into sections and bullets (bootstrap only) |
 | `bootstrap_engine.py` | turns that into a first `resume_db.yaml` |
 | `resume_db.py` | loads and indexes the database; builds the selection blob |
@@ -116,6 +117,7 @@ in what you send.
 | file | role |
 |---|---|
 | `llm_client.py` | backend registry and role resolution (`light` / `heavy` / `auto`), plus `parse_json_loose` |
+| `llm_utils.py` | pulls the text out of an API response, and normalises the look-alike characters a model emits (non-breaking hyphens and friends) before anything validates them |
 | `vendor/ollama_client.py` | local model. Imported only when the `ollama` backend is chosen. |
 | `vendor/claude_cli.py` | `claude -p`, with retries, rate-limit detection and a usage log |
 | `vendor/command_cli.py` | any agent CLI, argv from config |
@@ -212,8 +214,10 @@ CLI, you do not need code at all: add it under `backends:` in
 
 **A different résumé layout** → `resume_parser.py` (reading) and
 `resume_writer.find_section_block` (writing). This is the least portable part of
-the project; it assumes an `EXPERIENCE` heading and `Company, City` header
-lines.
+the project; it assumes an `EXPERIENCE` heading, `Company, City` header lines and
+bulleted achievements. `templates/make_template.py` builds a document in exactly
+that shape, so it doubles as the executable specification of the layout — change
+one and check the other.
 
 **A new prompt** → keep it in the module that owns the step, as a module-level
 template with `{named}` placeholders, and pass personal facts in from

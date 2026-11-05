@@ -59,8 +59,11 @@ def parse_experience_blocks(doc, start_after="EXPERIENCE"):
         idx = find_heading_index(paragraphs, start_after)
         if idx is None:
             raise ValueError(
-                f"Could not find the '{start_after}' section title in the resume — "
-                f"check that the template has an EXPERIENCE section title."
+                f"Could not find the '{start_after}' section title in the resume. Check that "
+                f"the document has a paragraph reading exactly '{start_after}' (or pass yours "
+                f"with --section-heading), that each employer is a 'Company, City' line, and "
+                f"that the bullets under it are bulleted paragraphs. "
+                f"templates/resume_template.docx is a document in that shape."
             )
         lo = idx + 1
     hi = len(paragraphs)

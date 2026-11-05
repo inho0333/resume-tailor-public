@@ -43,7 +43,9 @@ import json
 import os
 import re
 
+import llm_utils
 import pagefit
+import profile as profile_module
 import resume_db
 import tailor_engine
 
@@ -53,20 +55,20 @@ MAX_BULLET_CHARS = 260
 
 CRITIQUE_PROMPT_TEMPLATE = """\
 You are the **recruiter and hiring manager who personally owns hiring** for the "{role}"
-position at {company}. You are running the first screening pass over the pile of MBA intern
-applicant resumes for this position.
+position at {company}. You are running the first screening pass over the pile of
+{applicant_phrase} resumes for this position.
 
 [The real conditions of this screen — you must read on these premises]
-- Dozens to hundreds of students from top MBA programs apply to this same position. Many are
-  former consultants, former PMs or former bankers, and carry well-known US company logos.
+- Dozens to hundreds of {peer_pool_phrase} apply to this same position. Many carry
+  well-known logos and a directly relevant title.
 - You spend 6-8 seconds on one resume. Only the lead verbs, the first 7-8 words of each bullet,
   the size and unit of the numbers, and the recognizability of the organization names are
   effectively read. Assume impact hidden at the end of a sentence is not read.
 - You have no reason to be kind to this applicant. Do not write praise. Your job is to find
   reasons to reject.
-- This applicant built their career outside the US (VC and a large platform company) and has no
-  US company logo. If that has to count against them, say so honestly, but point it out
-  **separating what can be fixed in the sentences from what cannot.**
+- This is the applicant's background: {career_summary}. Where it does not line up with what
+  this position screens for, say so honestly, **separating what can be fixed in the sentences
+  from what cannot.**
 
 [Job posting analysis]
 {jd_profile_json}
@@ -129,7 +131,7 @@ Respond with the JSON below only (JSON only, no prose). Write every explanation 
 
 
 POLISH_PROMPT_TEMPLATE = """\
-You are an editor who **rewrites the resume bullets of an MBA internship applicant according to
+You are an editor who **rewrites the resume bullets of {applicant_phrase} according to
 recruiter feedback.** A recruiter for the "{role}" position at {company} has just put this
 resume through a first screen and left the review below.
 
@@ -264,8 +266,12 @@ def review(backend, company, role, jd_profile, sections, db_sections, jd_text=""
         research_block = ("\n[Recent company news] (context for the screen)\n"
                           f"{research['notes']}\n")
 
+    prof = profile_module.get()
     prompt = CRITIQUE_PROMPT_TEMPLATE.format(
         company=company, role=role,
+        applicant_phrase=prof.applicant_phrase,
+        peer_pool_phrase=prof.peer_pool_phrase,
+        career_summary=prof.career_summary or "not stated in profile.yaml",
         jd_profile_json=json.dumps(
             {k: v for k, v in (jd_profile or {}).items() if k != "company_research"},
             ensure_ascii=False, indent=2),
@@ -358,6 +364,7 @@ def polish(backend, company, role, review_data, sections, db_sections,
 
     prompt = POLISH_PROMPT_TEMPLATE.format(
         company=company, role=role, protected_blob=protected_blob,
+        applicant_phrase=profile_module.get().applicant_phrase,
         first_impression=review_data.get("first_impression") or "(none)",
         screening_score=review_data.get("screening_score"),
         verdict=review_data.get("verdict"),
@@ -381,7 +388,7 @@ def polish(backend, company, role, review_data, sections, db_sections,
             continue
         for item in items or []:
             bid = (item or {}).get("id")
-            new_text = (item or {}).get("text", "").strip()
+            new_text = llm_utils.normalize_typography((item or {}).get("text", "")).strip()
             if not bid or not new_text:
                 continue
             if id_to_section.get(bid) != name:
@@ -395,6 +402,11 @@ def polish(backend, company, role, review_data, sections, db_sections,
                 continue
             if "—" in new_text:
                 log(f"  [polish rejected] {bid}: contains an em dash")
+                continue
+            exotic = sorted({ch for ch in new_text if ch in llm_utils.NON_ASCII_DASHES})
+            if exotic:
+                log(f"  [polish rejected] {bid}: non-ASCII dash "
+                    f"({', '.join('U+%04X' % ord(ch) for ch in exotic)})")
                 continue
             if len(new_text) > MAX_BULLET_CHARS:
                 log(f"  [polish rejected] {bid}: {len(new_text)} chars, over the cap "

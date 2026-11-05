@@ -18,12 +18,14 @@
 name: Jordan Sample
 
 education:
-  school: Example University
+  # Deliberately not the example file's school: run._validate_inputs refuses to run when
+  # profile.yaml still carries profile.example.yaml's identity values.
+  school: Northgate University
   program: MBA
   graduation: 2027-05
   degree_is_technical: false
 
-work_authorization: "F-1 student visa; internships via CPT, which needs school approval only"
+work_authorization: "Student visa; internships allowed with school approval only"
 citizenship_requirements_block: true
 sponsorship_needed_later: false
 

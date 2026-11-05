@@ -449,6 +449,16 @@ def _validate_inputs(resume_path):
             f"no experience DB at {config.DB_PATH} — run "
             "'python run.py bootstrap --resume <your_resume.docx>' first."
         )
+    # profile.example.yaml copied and never edited: the eligibility screen, the fit judgment
+    # and the recruiter review would all run on a fictional person and still report PASS. It is
+    # checked here rather than only in `doctor` because nobody runs `doctor` after the first day.
+    stale_identity = profile_module.get().unedited_identity_fields()
+    if stale_identity:
+        raise errors.SetupError(
+            "profile.yaml still has profile.example.yaml's values for: "
+            + ", ".join(stale_identity)
+            + "\nEvery judgment would be about someone who does not exist. Edit those fields "
+              "(`python run.py doctor` lists them) and run again.")
     if config.TAILOR_MODE != "minimal":
         return
     # Minimal mode renders from base_resume.yaml, so a base that does not match the
@@ -979,6 +989,42 @@ def cmd_digest(args):
         print("no pending requests to send.")
 
 
+def cmd_pending(args):
+    """List the postings waiting for approval, and approve or skip one from the terminal.
+
+    `tailor --auto` stops at the approval gate: it judges fit on the light backend, queues the
+    posting, and spends nothing else. Until this command existed the only way past that gate
+    was a Telegram button, so anyone running --auto without a bot had postings that could
+    never be built. Pressing ✅ and `pending --make` run exactly the same code path."""
+    # Imported here, not at the top: confirm_handler imports this module.
+    import confirm_handler
+
+    if args.make or args.skip:
+        short_id = args.make or args.skip
+        if not confirm_state.get(short_id):
+            print(f"no pending request with id {short_id} (expired, or already handled). "
+                  "`run.py pending` lists what is queued.")
+            sys.exit(1)
+        if args.make:
+            confirm_handler.handle_make(short_id)
+        else:
+            confirm_handler.handle_skip(short_id)
+        return
+
+    records = [(sid, r) for sid, r in confirm_state.all_records().items()
+               if not confirm_state.is_expired(r)]
+    if not records:
+        print("nothing is waiting for approval.")
+        return
+    print(f"{len(records)} posting(s) waiting:\n")
+    for short_id, record in records:
+        prefit = (record.get("prefit") or {}).get("tier")
+        print(f"  {short_id}  {record.get('company')} · {record.get('role')}"
+              + (f"  [fit: {prefit}]" if prefit else ""))
+    print("\n  build one:  python run.py pending --make <id>"
+          "\n  pass on it: python run.py pending --skip <id>")
+
+
 def cmd_decisions(args):
     """Summarise the decision journal: what the user chose to build and what they passed on.
     This is the signal an upstream filter can learn from."""
@@ -1104,13 +1150,16 @@ def cmd_bootstrap(args):
 
     if not blocks:
         print("found no experience blocks — check your resume's formatting "
-              "(a company/location line must be followed by bulleted paragraphs).")
+              "(a company/location line must be followed by bulleted paragraphs). "
+              "templates/resume_template.docx is a document in the expected shape; "
+              "`python templates/make_template.py` regenerates it.")
         sys.exit(1)
 
     print(f"\nDetected {len(blocks)} section(s):")
     for b in blocks:
         name = resume_parser.section_name_from_header(b["header_text"])
-        print(f"  - {name} ({b['header_text']!r}): {len(b['bullets'])} bullets")
+        count = len(b["bullets"])
+        print(f"  - {name} ({b['header_text']!r}): {count} bullet{'' if count == 1 else 's'}")
     if not ask.confirm("\nProceed with this structure? (Y/n): ", default=True):
         print("Stopped. Check --section-heading or your resume's formatting and try again.")
         sys.exit(0)
@@ -1171,8 +1220,11 @@ def cmd_bootstrap(args):
     wrote_base = _write_base_resume_draft(resume_path, sections)
 
     total_bullets = sum(len(s["bullets"]) for s in sections)
-    print(f"\nDone: wrote {config.DB_PATH} ({total_bullets} bullets) and "
-          f"{config.USER_CONFIG_PATH}.")
+    written = [f"{config.DB_PATH} ({total_bullets} bullet{'' if total_bullets == 1 else 's'})",
+               config.USER_CONFIG_PATH]
+    if wrote_base:
+        written.append(minimal_tailor.BASE_YAML_PATH)
+    print("\nDone: wrote\n  " + "\n  ".join(written))
     print("\nNext:")
     print(f"  1. open {os.path.basename(config.DB_PATH)} and fill in each bullet's `context` — "
           "it is the background a rewrite draws on AND the list of numbers the tool is "
@@ -1470,15 +1522,23 @@ def cmd_doctor(args):
                "cp profile.example.yaml profile.yaml, then fill it in")
     else:
         missing = prof.missing_fields()
-        stale = prof.unedited_fields()
-        if stale:
-            # The quiet failure this catches: the example copied and never edited.
-            # Every prompt would then judge postings against a fictional person.
+        # The quiet failure this catches: the example copied and never edited. Identity fields
+        # left at the example's values are blocking — the eligibility screen, the fit judgment
+        # and the recruiter review would all run on a fictional person and still report PASS.
+        # Preference fields (voice, target roles) only cost quality, so they warn.
+        stale_identity = prof.unedited_identity_fields()
+        stale_prefs = prof.unedited_preference_fields()
+        if stale_identity:
+            record(_FAIL, "profile.yaml",
+                   "still has profile.example.yaml's values for: " + ", ".join(stale_identity),
+                   "edit those fields in profile.yaml — every judgment would be about someone "
+                   "who does not exist")
+        if stale_prefs:
             record(_WARN, "profile.yaml",
-                   "still has profile.example.yaml's values for: " + ", ".join(stale),
-                   "edit those fields in profile.yaml — they are describing someone who "
-                   "does not exist")
-        else:
+                   "still has profile.example.yaml's values for: " + ", ".join(stale_prefs),
+                   "replace them with your own: style_examples sets the voice the model "
+                   "copies, target_roles decides which postings survive the fit gate")
+        if not stale_identity and not stale_prefs:
             record(_WARN if missing else _OK, "profile.yaml",
                    ("incomplete: " + ", ".join(missing)) if missing else
                    f"{prof.program or 'degree'} / graduating {prof.graduation or '?'}",
@@ -1618,9 +1678,10 @@ def main():
     )
     p_tailor.add_argument(
         "--auto", action="store_true",
-        help="unattended mode — skip every interactive input() and report success or failure "
-             "over Telegram. An upstream job watcher (not part of this repo) calls the tool "
-             "with this flag when it sees a new posting.",
+        help="unattended mode: judge the posting on the light backend, then STOP at the "
+             "approval gate — queue it and write no draft. Generation starts when you press "
+             "the Telegram button or run `run.py pending --make <id>`. An upstream job "
+             "watcher (not part of this repo) calls the tool with this flag.",
     )
     p_tailor.add_argument(
         "--backend", metavar="NAME",
@@ -1697,6 +1758,15 @@ def main():
     p_review.add_argument("--notify", action="store_true",
                           help="also send the result over Telegram")
     p_review.set_defaults(func=cmd_review)
+
+    p_pending = sub.add_parser(
+        "pending",
+        help="list the postings waiting for approval, and build or skip one from the terminal")
+    p_pending.add_argument("--make", metavar="ID",
+                           help="generate the draft for this pending id (same as pressing ✅)")
+    p_pending.add_argument("--skip", metavar="ID",
+                           help="pass on this pending id (same as pressing ⏭️)")
+    p_pending.set_defaults(func=cmd_pending)
 
     p_digest = sub.add_parser("digest",
                               help="send the queued approval requests now, batched")

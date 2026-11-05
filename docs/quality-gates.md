@@ -18,10 +18,10 @@ top of that file; change them there, not in a prompt.
 A pipeline that rewrote every bullet for every posting produced this, and sent
 it:
 
-> Built a bottom-up model at a $500M AUM firm sizing customers x
+> Built a bottom-up model at a $200M AUM firm sizing customers x
 > willingness-to-pay (labor saved, spend on alternatives) x capture rate, held
-> to ~20%/~5% vs 60-70% claims; invested $4.2M across 40 companies (18
-> AI-driven), 7 with follow-on.
+> to ~20%/~5% vs 60-70% claims; invested $12.4M across 28 companies (9
+> AI-driven), 6 with follow-on.
 
 Two things are wrong and neither is a typo. It cannot be read — `held to
 ~20%/~5% vs 60-70% claims` means nothing to someone scanning for eight seconds.
@@ -52,6 +52,7 @@ a correct rejection from a bug.
 | **no length growth** | the edit may not be longer than the original | `MAX_LEN_GROWTH = 0` |
 | **no punctuation growth** | it may not add commas, semicolons, parentheses or words | — |
 | **no telegraphic notation** | `A x B x C`, `vs`, `~20%`, em dashes | `_SHORTHAND_PATTERNS` |
+| **plain hyphens only** | look-alike characters (non-breaking hyphen, figure dash, minus sign, no-break space) are rewritten to their ASCII equivalent before validation, and rejected if any survive | `llm_utils.normalize_typography`, `NON_ASCII_DASHES` |
 | **no borrowed nouns** | a proper noun or product name the original did not contain is rejected; acronyms are allowed | `_proper_nouns()` |
 | **protected lines** | lines starting `Skills:` or `Languages:` are never touched | `PROTECTED_PREFIXES` |
 | **total budget** | the sum of all bullets may exceed the original by at most 40 characters | `TOTAL_GROWTH_SLACK = 40` |
@@ -79,6 +80,7 @@ So a swap is held to **your own résumé's shape for that section** instead:
 | **at least one number** | a swap must keep at least one figure | — |
 | **no duplicated experience** | a swap sharing two or more figures with a bullet that is *staying* is the same story twice | `_duplicate_of_kept()` |
 | **retired is absolute** | `retired: true` cannot be offered as a candidate, and is refused if planned anyway | candidate list + `apply_plan` + a test |
+| **a swap is a different bullet** | `in == out` is rejected outright | `apply_plan` + a test |
 
 The duplicate check has a subtlety worth keeping: the comparison is against
 bullets that **remain** on the résumé, not the one being removed. Swapping to a
@@ -102,6 +104,17 @@ report says so explicitly.
 It will not manufacture a swap to look busy. The reason the retry exists at all:
 a run that ended with zero swaps was indistinguishable, from the report, from
 one that had swapped successfully.
+
+**When the database has nothing to swap in, the retry is skipped entirely.** That
+is the state `bootstrap` leaves a new setup in — every bullet in the database is
+already on the résumé — and asking again cannot produce a candidate that does not
+exist. It can only push the model into satisfying `MIN_SWAPS` dishonestly: the
+measured failure was a plan that "swapped" a bullet for itself, which routed a
+base sentence through the looser swap rules above, and it came back without its
+*why* and *how* clauses. Every gate passed it, the recruiter review caught it, and
+the report said `RESULT: PASS`. Two things now stop it — `in == out` is rejected,
+and `swap_candidates()` being empty ends the round early with a line in the report
+telling you to put the rest of your experience into `resume_db.yaml`.
 
 ## One page
 

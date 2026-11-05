@@ -36,9 +36,8 @@ class ProfileError(RuntimeError):
 # real sentences from another person, their numbers would leak into your résumé.
 _GENERIC_STYLE_EXAMPLES = (
     "Migrated billing from a monthly to a weekly cycle for 12,000 merchants, after churn "
-    "interviews showed payout speed was the top reason for leaving, by modelling the "
-    "working-capital impact and rebuilding settlement to carry corrections forward, "
-    "cutting merchant churn 18%",
+    "interviews showed payout speed drove attrition, by modelling the working-capital "
+    "impact and rebuilding settlement to carry corrections, cutting merchant churn 18%",
     "Launched a self-service returns flow after support logs showed 60% of tickets were "
     "one of three questions, coordinating support, logistics and two engineering teams to "
     "ship in a single quarter, removing 4,000 tickets a month",
@@ -91,14 +90,8 @@ class Profile:
         bits = []
         if self.program:
             # "an MBA student", "an MS Computer Science student", "a Master of
-            # Public Policy student". An initialism takes its article from how the
-            # letter is read aloud ("em-bee-ay"), a word from its first sound.
-            first = self.program.split()[0]
-            if first.isupper() and len(first) <= 4:
-                article = "an" if first[0] in "AEFHILMNORSX" else "a"
-            else:
-                article = "an" if first[0].lower() in "aeiou" else "a"
-            bits.append(f"{article} {self.program} student")
+            # Public Policy student".
+            bits.append(f"{self._article_for(self.program)} {self.program} student")
         else:
             bits.append("a graduate student")
         if self.school:
@@ -131,6 +124,47 @@ class Profile:
             term = f"{self.target_term} " if self.target_term else ""
             lines.append(f"- Looking for: {term}roles in {target}.")
         return "\n".join(lines)
+
+    @property
+    def targets_internship(self):
+        """Is this an internship search? Read off target_roles and target_term rather than
+        asked for separately — someone writing "mba intern" and "Summer 2027" has already
+        said so."""
+        if any("intern" in role for role in self.target_roles):
+            return True
+        return "summer" in self.target_term.lower() or "intern" in self.target_term.lower()
+
+    @property
+    def applicant_phrase(self):
+        """'an MBA internship applicant' — how a prompt names the person it writes for.
+
+        The rewrite, review and polish prompts used to say "an MBA internship applicant"
+        literally. For anyone who is not doing an MBA internship search that is a prompt
+        describing a different person, on the calls where quality actually matters.
+        """
+        kind = "internship applicant" if self.targets_internship else "applicant"
+        if not self.program:
+            return f"an {kind}" if kind[0] in "aeiou" else f"a {kind}"
+        article = self._article_for(self.program)
+        return f"{article} {self.program} {kind}"
+
+    @property
+    def peer_pool_phrase(self):
+        """Who else is in the pile, for the recruiter persona ('students from top MBA
+        programs'). The recruiter's whole job in this prompt is comparison, so the comparison
+        set has to be the applicant's real one."""
+        if not self.program:
+            return "strong applicants for this role"
+        return f"{self.program} students from strong programmes"
+
+    @staticmethod
+    def _article_for(phrase):
+        """'MBA' -> 'an' (em-bee-ay), 'Master of Public Policy' -> 'a'. An initialism takes its
+        article from how the letter is read aloud, a word from its first sound."""
+        first = phrase.split()[0]
+        if first.isupper() and len(first) <= 4:
+            return "an" if first[0] in "AEFHILMNORSX" else "a"
+        return "an" if first[0].lower() in "aeiou" else "a"
 
     def eligibility_block(self):
         """The applicant description in the degree/authorisation screen."""
@@ -185,30 +219,46 @@ class Profile:
             missing.append("style_examples (falling back to generic examples)")
         return missing
 
-    def unedited_fields(self, example=None):
+    # Example values that make every judgment be about a different person: who you are, where
+    # you study, and what you have done. A run in this state is not degraded, it is wrong, so
+    # `run.py doctor` treats these as blocking.
+    IDENTITY_FIELDS = (("name", "name"),
+                       ("school", "education.school"),
+                       ("career_summary", "career_summary"),
+                       ("employers", "employers"))
+    # Example values that cost quality but describe no false fact: the fallback voice and a
+    # generic set of target roles. A warning.
+    PREFERENCE_FIELDS = (("style_examples", "style_examples"),
+                         ("target_roles", "target_roles"))
+
+    def unedited_fields(self, example=None, fields=None):
         """Fields still identical to profile.example.yaml.
 
         Copying the example and forgetting to edit it is silent, and it is the
         one mistake this whole file exists to prevent: the prompts would then
         judge every posting against a fictional person's degree and describe
-        someone else's bullets as your voice. `run.py doctor` turns this into a
-        visible warning.
+        someone else's bullets as your voice.
+
+        fields: which group to check (default: both). `run.py doctor` asks for
+        IDENTITY_FIELDS and PREFERENCE_FIELDS separately so it can fail on the
+        first and merely warn about the second.
         """
         try:
             example = example or load(path=EXAMPLE_PATH, required=False)
         except ProfileError:
             return []
         stale = []
-        for field, label in (("name", "name"),
-                             ("school", "education.school"),
-                             ("career_summary", "career_summary"),
-                             ("employers", "employers"),
-                             ("style_examples", "style_examples"),
-                             ("target_roles", "target_roles")):
+        for field, label in (fields or (self.IDENTITY_FIELDS + self.PREFERENCE_FIELDS)):
             mine, theirs = getattr(self, field), getattr(example, field)
             if mine and theirs and mine == theirs:
                 stale.append(label)
         return stale
+
+    def unedited_identity_fields(self, example=None):
+        return self.unedited_fields(example=example, fields=self.IDENTITY_FIELDS)
+
+    def unedited_preference_fields(self, example=None):
+        return self.unedited_fields(example=example, fields=self.PREFERENCE_FIELDS)
 
 
 def load(path=None, required=True):

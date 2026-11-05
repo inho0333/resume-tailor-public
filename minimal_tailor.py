@@ -8,9 +8,9 @@ Before it, the pipeline **re-picked and completely rewrote** the bullets out of
 `recruiter_review.polish`). The result was, by the owner's judgement, about as bad as it
 gets. Sentences that actually shipped:
 
-    Built a bottom-up model at a $500M AUM firm sizing customers x willingness-to-pay
+    Built a bottom-up model at a $200M AUM firm sizing customers x willingness-to-pay
     (labor saved, spend on alternatives) x capture rate, held to ~20%/~5% vs 60-70% claims;
-    invested $4.2M across 40 startups (18 AI-driven), 7 with follow-on from a top-tier fund.
+    invested $12.4M across 28 startups (9 AI-driven), 6 with follow-on from a top-tier fund.
 
 You cannot tell what it is saying (`held to ~20%/~5% vs 60-70% claims`), and cramming facts
 into a 250-character budget pushed the Why and the Impact out, so there is no impact either.
@@ -61,6 +61,8 @@ import yaml
 
 import config
 import keyword_extractor
+import llm_utils
+import profile as profile_module
 import tailor_engine
 
 BASE_YAML_PATH = os.path.join(config.PROJECT_ROOT, "base_resume.yaml")
@@ -210,6 +212,13 @@ def check_text(new_text, original_text, db_bullet, label="", min_overlap=MIN_WOR
         return "empty sentence"
     if "—" in new_text or "–" in new_text:
         return "em dash/en dash used"
+    # A safety net behind llm_utils.normalize_typography: the caller normalises the look-alike
+    # characters away before validating, so anything left here arrived by another route.
+    exotic = sorted({ch for ch in new_text if ch in llm_utils.NON_ASCII_DASHES})
+    if exotic:
+        return ("non-ASCII dash/hyphen used "
+                f"({', '.join('U+%04X' % ord(ch) for ch in exotic)}) — it breaks a plain-text "
+                "paste into an ATS field")
     limit = max_len if max_len is not None else len(original_text) + MAX_LEN_GROWTH
     if len(new_text) > limit:
         return f"too long ({len(new_text)} chars > cap {limit} chars)"
@@ -283,8 +292,8 @@ def _proper_nouns(text):
 
 
 PLAN_PROMPT_TEMPLATE = """\
-You are a career coach making the **smallest possible** adjustments to an MBA internship
-applicant's **finished base résumé** so that it fits one specific job description (JD). This is
+You are a career coach making the **smallest possible** adjustments to {applicant_phrase}'s
+**finished base résumé** so that it fits one specific job description (JD). This is
 not a job of writing new sentences — the base sentences are already the result of the
 applicant's own hand-editing, and they are the quality bar.
 
@@ -391,6 +400,15 @@ def _base_blob(base):
     return "\n".join(lines)
 
 
+def swap_candidates(base, db_sections):
+    """Every DB bullet that could be swapped in: not already on the résumé, not a fixed-format
+    line, not retired. `run` checks this before spending a second call on a forced swap, and
+    `run.py doctor` reports it as a setup gap when it is empty."""
+    in_base = set(base_index(base))
+    return [b for section in db_sections for b in section["bullets"]
+            if b["id"] not in in_base and not is_protected(b["text"]) and not b.get("retired")]
+
+
 def _candidates_blob(base, db_sections, limit_per_section=8):
     """Show only DB bullets that are not already in the base résumé as swap candidates (so
     nothing already on the page is recommended again).
@@ -494,6 +512,7 @@ def plan(backend, base, db_sections, jd_profile, keyword_counts=None, keep_ids=(
     feedback: the block attached to the second request when the first plan was rejected
     (`_feedback_blob`)."""
     prompt = PLAN_PROMPT_TEMPLATE.format(
+        applicant_phrase=profile_module.get().applicant_phrase,
         base_blob=_base_blob(base),
         jd_profile_json=json.dumps(jd_profile, ensure_ascii=False, indent=2),
         keyword_blob=keyword_extractor.format_for_prompt(keyword_counts or []),
@@ -528,7 +547,24 @@ def apply_plan(base, db_sections, plan_data, keep_ids=(), log=print):
 
     planned_outs = {item.get("out") for item in plan_data.get("swaps", [])[:MAX_SWAPS]}
     for item in plan_data.get("swaps", [])[:MAX_SWAPS]:
-        out_id, in_id, text = item.get("out"), item.get("in"), item.get("text")
+        out_id, in_id = item.get("out"), item.get("in")
+        text = llm_utils.normalize_typography(item.get("text"))
+        # A swap must bring in a **different** experience. Without this, a plan that swaps a
+        # bullet for itself is validated against the loose swap rules (45% word retention,
+        # secondary figures allowed to drop) instead of the edit rules (70% retention, every
+        # figure kept) — which is how a base sentence silently loses a clause.
+        #
+        # It is not hypothetical: a database holding only the bullets already on the résumé has
+        # no swap candidates at all, which is exactly the state `bootstrap` leaves a new user
+        # in. MIN_SWAPS then asks for a plan again, and the model satisfies it by "swapping" a
+        # bullet for itself. Measured once: a bullet came back without its Why and How clauses
+        # and every gate passed it.
+        if in_id == out_id:
+            applied["rejected"].append(
+                {"id": in_id,
+                 "why": "a swap must bring in a different bullet (in == out); "
+                        "reword it as an edit instead"})
+            continue
         if out_id not in idx:
             applied["rejected"].append(
                 {"id": out_id, "why": "tried to drop a bullet that is not in the base"})
@@ -591,13 +627,17 @@ def apply_plan(base, db_sections, plan_data, keep_ids=(), log=print):
                                  "text": text})
 
     for item in plan_data.get("edits", []):
-        bullet_id, text = item.get("id"), item.get("text")
+        bullet_id = item.get("id")
+        text = llm_utils.normalize_typography(item.get("text"))
         if bullet_id not in idx:
             applied["rejected"].append(
                 {"id": bullet_id, "why": "tried to edit a bullet that is not in the base"})
             continue
         if bullet_id in swaps:
             continue  # editing a bullet that is being swapped out is pointless
+        if not (text or "").strip():
+            applied["rejected"].append({"id": bullet_id, "why": "edit rejected: empty sentence"})
+            continue
         original = idx[bullet_id]["text"]
         if is_protected(original):
             applied["rejected"].append(
@@ -700,6 +740,19 @@ def run(backend, base, db_sections, jd_profile, keyword_counts=None, keep_ids=()
 
     result, applied = apply_plan(base, db_sections, _ask(), keep_ids=keep_ids, log=log)
     if len(applied["swaps"]) >= MIN_SWAPS:
+        return result, applied
+
+    # Nothing to swap in: every bullet in the database is already on the résumé, which is the
+    # state `bootstrap` leaves a new user in until they add the experience their résumé left
+    # out. Asking again cannot help — it only spends a call and pushes the model towards
+    # satisfying MIN_SWAPS by cheating (swapping a bullet for itself, now rejected in
+    # apply_plan).
+    if not swap_candidates(base, db_sections):
+        log("  [no swap] the database holds only the bullets already on your résumé, so there "
+            "is nothing to swap in — add the experience your résumé leaves out to "
+            "resume_db.yaml. Keeping the base bullet set.")
+        applied["no_swap"] = True
+        applied["no_swap_candidates"] = True
         return result, applied
 
     log(f"  [re-request] only {len(applied['swaps'])} valid swap(s) — asking for the plan again "
@@ -813,6 +866,7 @@ def shorten_deletion_only(backend, text, need_chars, db_bullet=None, log=print):
         log(f"  [shorten failed (skipped)] {e}")
         return None
     candidate = (raw or "").strip().strip('"').splitlines()[0].strip() if raw else ""
+    candidate = llm_utils.normalize_typography(candidate)
     if not candidate:
         return None
     if len(text) - len(candidate) < need_chars:

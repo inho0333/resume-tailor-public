@@ -1,7 +1,9 @@
 # Setup
 
-Zero to a first tailored résumé. About 40 minutes, most of it step 7 — writing
-down your own experience, which is the part that decides how good the output is.
+Zero to a first tailored résumé. Steps 1-6 take about half an hour; step 7 —
+writing down your own experience — is an hour or two and is the part that decides
+how good the output is. You can run the whole thing before step 7 and see what
+comes out.
 
 At any point:
 
@@ -18,7 +20,7 @@ an error, which is why it exists.
 ## 1. Install
 
 ```bash
-git clone <this repo> resume-tailor
+git clone https://github.com/inho0333/resume-tailor-public.git resume-tailor
 cd resume-tailor
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -123,10 +125,11 @@ Under "LLM backends", at least one line should say `available`, and both
 cp profile.example.yaml profile.yaml
 ```
 
-Open it and replace every value — and do replace them: `doctor` reports any field
-still carrying the example's value, because a profile left as "Jane Doe of
-Example University" silently makes every judgment about a person who does not
-exist.
+Open it and replace every value. `name`, `education.school`, `career_summary` and
+`employers` are **blocking**: left at the example's values, `tailor` refuses to run
+and `doctor` reports a FAIL, because every judgment would be about a person who
+does not exist. The rest (`style_examples`, `target_roles`) only warn — they cost
+quality, not correctness.
 
 The comments in the file say what each field is for and what goes wrong when it
 is wrong; the ones that matter most:
@@ -155,18 +158,39 @@ is wrong; the ones that matter most:
 
 ## 4. Get your résumé into the right shape
 
-The .docx you point this at is the template *and* the quality baseline. It must:
+The .docx you point this at is the template *and* the quality baseline. Everything
+is rendered back into it, so its layout is the output's layout. It must:
 
 - **be one page already.** The tool keeps you at one page by reverting its own
   edits, which only converges if the original fits.
 - **have an `EXPERIENCE` section heading** (or pass yours with
   `--section-heading`), with each employer as a `Company, City` header line
   followed by its bullets.
+- **have bulleted achievements**, not paragraphs. A bullet is a paragraph with
+  Word's bullet formatting or a `List Bullet` style; prose under a heading parses
+  as zero experience blocks.
 - **have the fonts you want.** Output inherits them. Calibri is what the page
   measurement is calibrated against.
 
 Copy it somewhere stable — the path goes in `user_config.yaml` and should not
 move.
+
+### No résumé in that shape?
+
+`templates/resume_template.docx` is one: a standard one-page business-school
+layout — centred name, a contact line, 12pt bold section headings, each employer
+as `Company, City` with its dates on a right tab stop, a one-line description of
+the employer, the title and date range, then bulleted achievements.
+
+```bash
+# see the whole pipeline work on the fictional person in the template first
+.venv/bin/python run.py bootstrap --resume templates/resume_template.docx
+```
+
+Then either replace its content with your own (keeping the paragraph shapes) or
+reshape your existing résumé to match it. `python templates/make_template.py`
+regenerates the file if you want to change the layout itself — that script is
+where the layout is defined, and its header explains each decision.
 
 ---
 
@@ -346,6 +370,15 @@ use `--jd-file`. There is no fixing this in general.
 Only needed if something hands postings to this tool automatically. Skip it if
 you run `tailor` yourself.
 
+Without it, `tailor --auto` still works: it judges the posting on the light
+backend, queues it, and spends nothing more. Approve from the terminal instead:
+
+```bash
+.venv/bin/python run.py pending                 # what is queued
+.venv/bin/python run.py pending --make <id>     # build it (same as pressing ✅)
+.venv/bin/python run.py pending --skip <id>     # pass on it
+```
+
 1. Create a bot with [@BotFather](https://t.me/botfather), note the token.
 2. Message your bot once, then read your chat id from
    `https://api.telegram.org/bot<TOKEN>/getUpdates`.
@@ -389,7 +422,10 @@ digest schedule, and what to do when the listener goes quiet.
 | page count "could not be measured" | no Word, or the access dialog is waiting | step 9, or accept the estimate |
 | rate-limit message on `claude-cli` | the subscription window is shared with your interactive sessions | wait for the reset it names, or switch backend for that run |
 | the extracted posting is boilerplate | JavaScript-rendered job board | save the text and use `--jd-file` |
-| Telegram buttons do nothing | `bot_listener.py` is not running | start it (step 11) |
+| Telegram buttons do nothing | `bot_listener.py` is not running | start it (step 11), or approve from the terminal with `run.py pending --make <id>` |
+| `--auto` produced no draft | that is the approval gate, not a failure | `run.py pending` lists it; `--make` builds it |
+| `profile.yaml still has profile.example.yaml's values` | step 3 half-done | edit the fields the message names |
+| `found no experience blocks` | the résumé is prose, or has no `EXPERIENCE` heading | step 4; compare against `templates/resume_template.docx` |
 
 Still stuck: `doctor` first, then `doctor --probe`, then the report file in
 `output/<Company>/`, which records every rejection with its reason.

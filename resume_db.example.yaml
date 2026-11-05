@@ -36,10 +36,10 @@ sections:
         #   - lead with a verb, then What → Why → How → Impact
         #   - do not reuse the same lead verb across bullets in one section
         text: >-
-          Migrated billing from a monthly to a weekly cycle for 12,000 merchants,
-          after churn interviews showed payout speed was the top reason for leaving,
-          by modelling the working-capital impact and rebuilding settlement to carry
-          corrections forward, cutting merchant churn 18%.
+          Migrated billing from a monthly to a weekly cycle for 12,000 merchants, after
+          churn interviews showed payout speed drove attrition, by modelling the
+          working-capital impact and rebuilding settlement to carry corrections,
+          cutting merchant churn 18%.
 
         # Free vocabulary. Matched against the job description to decide which
         # bullets are relevant, so use the words a posting would use, not internal
@@ -84,10 +84,10 @@ sections:
 
       - id: acme-support-routing
         text: >-
-          Rebuilt customer support routing around fault attribution rather than
-          inquiry wording, after a transaction surge made headcount the default
-          answer, by interviewing agents to build a taxonomy and reaching into
-          settlement for partial-order cases, automating 18% of monthly volume.
+          Rebuilt support routing around fault attribution rather than inquiry wording,
+          after a transaction surge made headcount the default answer, by interviewing
+          agents to build a taxonomy and extending settlement to partial orders,
+          automating 18% of volume.
         tags:
           org: ACME CORP.
           keywords: [customer support, automation, taxonomy, process design]
