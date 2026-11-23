@@ -8,12 +8,39 @@ already been made and paid for.
 
 With no terminal, each helper returns the default it was given and says so, so a
 non-interactive run behaves exactly like `--auto`.
+
+## Except where a default is not an answer
+
+That rule is right for `tailor`, where every default is "carry on", and wrong
+for `run.py setup`, where the defaults are empty. Piping answers into setup —
+from a script, a container build, or an IDE terminal that allocates no tty —
+silently skipped every question, wrote a `profile.yaml` whose name and career
+summary were empty strings, and finished by printing "Nothing is missing."
+
+So a caller that cannot work without real answers says so with
+`require_answers()`. Prompts then read stdin whether or not it is a terminal,
+which works for a pipe, and still fall back to the default at end of input
+rather than raising.
 """
 
 import sys
 
+_require_answers = False
+
+
+def require_answers(flag=True):
+    """Read stdin even when it is not a terminal.
+
+    For `run.py setup`, whose defaults are empty values rather than safe ones.
+    Never set this in a path that may run unattended.
+    """
+    global _require_answers
+    _require_answers = bool(flag)
+
 
 def _interactive():
+    if _require_answers:
+        return True
     try:
         return sys.stdin is not None and sys.stdin.isatty()
     except (AttributeError, ValueError):

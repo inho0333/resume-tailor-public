@@ -43,6 +43,7 @@ import subprocess
 
 import docx
 
+import config
 import resume_writer
 from docx.oxml.ns import qn
 
@@ -56,10 +57,10 @@ TRIM_SAFETY_CHARS = 10   # Cut the last line's chars plus this much so the line 
 # words on the last line" is not the normal distribution but something to repair. By contrast,
 # one generated draft had 5 of 13 bullets ending in a single word, each wasting a whole line.
 
-# Lines whose format you fixed are excluded from automatic compression. The Skills/Languages
-# lines have a settled "capability (tool)" order and item composition, so an LLM must not shorten
-# them at will (your instruction).
-PROTECTED_PREFIXES = ("Skills:", "Languages:")
+# Lines whose format is fixed are excluded from automatic compression. A Skills or Languages
+# line has a settled order and item composition, so a model must not shorten it at will.
+# Which labels those are is a property of your document, so it comes from user_config.yaml.
+PROTECTED_PREFIXES = config.PROTECTED_PREFIXES
 MAX_LINE_WALK = 15       # Cap on the line walk within one paragraph (no infinite loop).
 # One measurement takes 10-20 seconds for 13 bullets. Why the cap came down from 180 seconds: when
 # Word puts up its "Grant File Access" dialog, osascript does not finish **until a human clicks

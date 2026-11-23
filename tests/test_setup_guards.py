@@ -35,18 +35,19 @@ def test_unedited_profile_is_detected():
     """
     example = profile_module.load(path=profile_module.EXAMPLE_PATH)
     stale = example.unedited_fields()
-    assert "name" in stale and "education.school" in stale
-    assert "style_examples" in stale
+    assert "name" in stale and "background.education.school" in stale
+    assert "voice.style_examples" in stale
 
 
 def test_edited_profile_is_not_flagged():
     data = yaml.safe_load(open(profile_module.EXAMPLE_PATH, encoding="utf-8"))
     data["name"] = "Sam Rivera"
-    data["education"]["school"] = "Northwestern Kellogg"
-    data["career_summary"] = "Payments product management, then seed investing."
-    data["employers"] = ["Meridian Pay", "Harbor Capital"]
-    data["style_examples"] = ["Shipped a thing that moved a number by 11%, measured in SQL"]
-    data["target_roles"] = ["payments product"]
+    data["background"]["education"]["school"] = "Northwestern Kellogg"
+    data["background"]["summary"] = "Payments product management, then seed investing."
+    data["background"]["employers"] = ["Meridian Pay", "Harbor Capital"]
+    data["voice"]["style_examples"] = [
+        "Shipped a thing that moved a number by 11%, measured in SQL"]
+    data["search"]["target_roles"] = ["payments product"]
     assert profile_module.Profile(data).unedited_fields() == []
 
 
@@ -319,3 +320,104 @@ def test_confirm_returns_its_default_without_a_terminal(capsys):
 def test_line_returns_its_default_without_a_terminal():
     assert ask.line("answer: ") == ""
     assert ask.line("answer: ", default="skip") == "skip"
+
+
+# ── the wizard's own guards ─────────────────────────────────────────────────
+
+def test_setup_demands_real_answers_rather_than_taking_defaults(monkeypatch):
+    """`ask` returns the default without reading stdin whenever stdin is not a
+    terminal, which is right for an unattended `tailor` and wrong for `setup`,
+    whose defaults are all empty.
+
+    Measured: piping answers into setup skipped every question, wrote a
+    profile.yaml whose name and career summary were empty strings, and finished
+    by printing "Nothing is missing."
+    """
+    import setup_wizard
+
+    monkeypatch.setattr(ask, "_require_answers", False)
+    assert ask._interactive() in (True, False)   # whatever this terminal is
+
+    calls = []
+    monkeypatch.setattr(ask, "require_answers", lambda *a: calls.append(a))
+    monkeypatch.setattr(setup_wizard, "_STAGE_FUNCS", {"environment": lambda: False})
+    monkeypatch.setattr(setup_wizard, "STAGES", ("environment",))
+    setup_wizard.run_wizard()
+    assert calls, "run_wizard must put ask into require-answers mode"
+
+
+def test_require_answers_reads_a_pipe(monkeypatch):
+    import io
+
+    monkeypatch.setattr(ask, "_require_answers", True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "typed")
+    assert ask.line("q: ") == "typed"
+    # and still falls back at end of input rather than raising
+    def _eof(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", _eof)
+    assert ask.line("q: ", default="fell back") == "fell back"
+    assert ask.confirm("q: ", default=True) is True
+
+
+def test_an_empty_identity_is_blocking_not_a_warning():
+    """The staleness check catches "copied the example and never edited it". This
+    is the other half, which the wizard made the likelier one: a profile that was
+    written but never answered.
+
+    An empty string does not equal the example's value, so the staleness check
+    returns nothing for it — and a profile.yaml whose name and career summary
+    were both '' passed `doctor` with a single warning.
+    """
+    blank = profile_module.Profile({
+        "name": "", "background": {"kind": "experienced", "summary": "", "employers": []},
+        "search": {"kind": "full_time", "target_roles": []},
+    })
+    empty, stale = blank.blocking_identity_problems()
+    assert "name" in empty
+    assert "background.summary" in empty
+    assert stale == []          # nothing is STALE — that was the whole problem
+
+
+def test_a_field_that_is_honestly_empty_does_not_block():
+    """The first version of the emptiness check reused the staleness field list
+    and blocked a real setup: someone with no degree they wanted considered left
+    the school empty, which profile.example.yaml documents as supported, and the
+    tool refused to run.
+
+    Staleness and emptiness are different questions. "Example University" is a
+    stranger's school and blocks; no school at all is an answer.
+    """
+    no_degree = profile_module.Profile({
+        "name": "Wei Lin Tan",
+        "background": {"kind": "experienced", "years_experience": 4,
+                       "summary": "Contract product design for lending apps.",
+                       "employers": ["Independent"],
+                       "education": {"school": "", "program": ""}},
+        "search": {"kind": "contract", "target_roles": ["product designer"]},
+    })
+    assert no_degree.blocking_identity_problems() == ([], [])
+    assert "student" not in no_degree.degree_label
+
+    # An empty target_roles list is supported too — the cost is that no posting
+    # can reach "strong fit", which `missing_fields` reports as a warning.
+    no_roles = profile_module.Profile({
+        "name": "A", "background": {"kind": "experienced", "years_experience": 3,
+                                     "summary": "Some work.", "employers": []},
+        "search": {"kind": "full_time", "target_roles": []},
+    })
+    assert no_roles.blocking_identity_problems() == ([], [])
+    assert "search.target_roles" in no_roles.missing_fields()
+
+
+def test_a_filled_identity_is_not_flagged():
+    filled = profile_module.Profile({
+        "name": "Sam Rivera",
+        "background": {"kind": "experienced", "years_experience": 7,
+                       "summary": "Payments product management.",
+                       "employers": ["Meridian Pay"],
+                       "education": {"school": "Northgate University"}},
+        "search": {"kind": "full_time", "target_roles": ["payments product"]},
+    })
+    assert filled.blocking_identity_problems() == ([], [])

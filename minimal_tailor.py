@@ -68,7 +68,7 @@ import tailor_engine
 BASE_YAML_PATH = os.path.join(config.PROJECT_ROOT, "base_resume.yaml")
 
 MAX_SWAPS = 2
-# **At least one swap** is the default (your instruction: "swap one or two bullets on top of
+# **At least one swap** is the default (the rule this mode was built to follow: "swap one or two bullets on top of
 # the latest version"). One second-pass run ended with zero swaps and produced a draft
 # effectively identical to the base résumé — given the slack of "zero if there is no reason to
 # change anything", the model picks zero. If no swap survives validation, the rejection
@@ -99,9 +99,9 @@ SWAP_MAX_PARENS = 1
 # a measurement in Word — with zero slack even a single 2-character edit got reverted and the
 # JD tailoring disappeared altogether (measured once).
 TOTAL_GROWTH_SLACK = 40
-# Lines whose format is fixed — excluded from edits and swaps (same reason as
-# pagefit.PROTECTED_PREFIXES).
-PROTECTED_PREFIXES = ("Skills:", "Languages:")
+# Lines whose format is fixed — excluded from edits and swaps. Set in
+# user_config.yaml, because the label is your document's, not this project's.
+PROTECTED_PREFIXES = config.PROTECTED_PREFIXES
 _SHORTHAND_PATTERNS = (
     (r"\s[x×]\s", "formula-style chaining (x)"),
     (r"\bvs\.?\b", "vs comparison"),
@@ -292,8 +292,8 @@ def _proper_nouns(text):
 
 
 PLAN_PROMPT_TEMPLATE = """\
-You are a career coach making the **smallest possible** adjustments to {applicant_phrase}'s
-**finished base résumé** so that it fits one specific job description (JD). This is
+You are a career coach making the **smallest possible** adjustments to the **finished base
+résumé** of {applicant_phrase} so that it fits one specific job description (JD). This is
 not a job of writing new sentences — the base sentences are already the result of the
 applicant's own hand-editing, and they are the quality bar.
 
@@ -345,7 +345,7 @@ Do only the following two things.
      stretched across two lines (the code rejects it for duplicate figures). Only swap in a way
      that widens the range of experience.
 
-[Priority] (your instructions — when they conflict, the higher one wins)
+[Priority] (when these conflict, the higher one wins)
 1. **Showing a distinctive capability and a quantified result comes first.** The figures
    (scale, amount, multiple, rate) and the applicant's own judgement that produced them must
    stay in the sentence. An edit that drops even one figure is rejected by the code.
@@ -727,7 +727,7 @@ def run(backend, base, db_sections, jd_profile, keyword_counts=None, keep_ids=()
     out.
 
     If fewer than `MIN_SWAPS` swaps survive, the rejection reasons are attached and the plan is
-    requested **one more time** (your instruction: swapping one or two bullets on top of the base
+    requested **one more time** (the rule for this mode: swapping one or two bullets on top of the base
     is the core of this task). If the retry is also zero, the first result is used as it is —
     the code never manufactures a forced swap."""
     def _ask(feedback=""):

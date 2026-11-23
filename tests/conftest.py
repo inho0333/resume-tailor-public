@@ -14,10 +14,11 @@ time, so the profile is installed by setting the module cache directly and clear
 it again afterwards. That is the only route that reaches code which has already
 imported the module.
 
-Nothing in the suite may reach the network or a model CLI. Telegram's sender is
-stubbed for every test, because `TG_BOT_TOKEN` / `TG_CHAT_ID` are set in a real
-user's environment and `vendor.telegram.send` would otherwise post for real; LLM
-backends are always the fake ones the test files define.
+Nothing in the suite may reach the network or a model CLI. Every notification
+channel is stubbed out for every test: `TG_BOT_TOKEN` / `TG_CHAT_ID` are set in a
+real user's environment and would otherwise post for real, and the local channel
+would append to `state/inbox.md` in the working copy. LLM backends are always the
+fake ones the test files define.
 """
 
 import os
@@ -27,6 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import channels
 import minimal_tailor as mt
 import notify
 import profile as profile_module
@@ -69,7 +71,13 @@ def no_telegram(monkeypatch):
 
     monkeypatch.setattr(vendor.telegram, "send", _not_sent)
     monkeypatch.setattr(notify, "send_message", _not_sent)
-    monkeypatch.setattr(notify, "send_document", _not_sent)
+    # send_document returns the channels that delivered it, so "nothing
+    # delivered" is an empty list rather than False.
+    monkeypatch.setattr(notify, "send_document", lambda *_a, **_k: [])
+    # No channel at all, so info/alert/critical reach neither a network nor the
+    # local inbox file. Returning [] is a real configuration (`notify_channels:
+    # []`), not a special test-only state.
+    monkeypatch.setattr(channels, "enabled", lambda *_a, **_k: [])
 
 
 @pytest.fixture(scope="session")

@@ -7,7 +7,7 @@ seven days / 31 still waiting. That is **56 pieces of labelled preference data**
 already existed, and all of it survived only as a line in `logs/bot_listener.log`
 while the `confirm_state` record was deleted at the moment of the decision. The only
 real data available for the few-shot examples of the upstream filter (an upstream job
-watcher, not part of this repo) and for calibrating the pre-fit assessment
+tracker's own relevance filter) and for calibrating the pre-fit assessment
 (fit_gate.assess_prefit) was being thrown away.
 
 An expiry is recorded as an "implicit no" — the user saw it for seven days and never
@@ -22,11 +22,19 @@ corrupted, only that line is lost):
   {"ts", "decision": make|skip|expire, "company", "role", "url", "track",
    "eligible": yes|no|unclear, "visa_caution", "sponsorship_excluded",
    "prefit": high|mid|low|null,
-   "prefit_reason", "must_have": [...], "source": button|prune|backfill}
+   "prefit_reason", "must_have": [...], "source": button|prune|backfill,
+   "location", "employment_type", "seniority_level", "years_required"}
 
-The upstream job watcher's filter (not part of this repo) reads the same file
-**read-only** — the file path is the contract between the two repos, so changing it
-means changing both sides.
+The last four were added later. They are what makes "I skip everything outside
+the Bay Area" and "I skip anything below Staff" learnable: the journal is the
+only record of the user's taste, and for a long time it carried the degree and
+visa flags but nothing about where the job was or what level it was pitched at —
+so a preference held consistently for months could never be read back out of it.
+
+Fields are only ever **added** here. The tracker's relevance filter reads the
+same file, as may an upstream watcher outside this repo; a reader that does not
+know a key must keep working, which is why nothing is renamed and nothing is
+removed.
 """
 
 import datetime
@@ -66,6 +74,10 @@ def record(decision, record_or_fields, source="button"):
         "prefit_reason": (prefit.get("reason") or "")[:200],
         "must_have": [m for m in (jd_profile.get("must_have_skills") or []) if m][:4],
         "source": source,
+        "location": jd_profile.get("location") or None,
+        "employment_type": jd_profile.get("employment_type") or None,
+        "seniority_level": jd_profile.get("seniority_level") or None,
+        "years_required": jd_profile.get("years_required"),
     }
     try:
         os.makedirs(config.STATE_DIR, exist_ok=True)
@@ -119,6 +131,13 @@ def fewshot_lines(max_positive=8, max_negative=8):
     pos, neg = [], []
     for r in load():
         line = f"{r.get('company', '?')} — {r.get('role', '?')}"
+        # Where and at what level, when the entry has them. Without these the
+        # examples teach role families only, and a location or seniority
+        # preference is invisible however consistently it was applied.
+        context = [r.get("location"), r.get("seniority_level")]
+        context = [str(c) for c in context if c]
+        if context:
+            line += f" ({', '.join(context)})"
         if r.get("decision") == "make" and len(pos) < max_positive:
             pos.append(f"{line} → true (the user actually made a draft)")
         elif r.get("decision") in ("skip", "expire") and len(neg) < max_negative:

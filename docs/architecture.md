@@ -25,26 +25,34 @@ spending model calls on postings you would not apply to.
 ## Flow
 
 ```
-  posting URL / text file
-          │
-          ▼
+  tracker/ (optional)                    posting URL / text file
+    sources/*.fetch   per source  code           │
+    dedupe            seen it?    code           │
+    jd_lookup         fill body   code           │
+    relevance         my field?   LIGHT          │
+          └────────────────────────────────┬─────┘
+                                           ▼
   ┌───────────────────────────────────────────────────────────┐
   │ jd_extractor.py                                           │
-  │   fetch_jd_text_from_url      readability + HTML fallback │ code
+  │   fetch_jd                    JSON-LD → readability → HTML│ code
   │   detect_sponsorship_exclusion regex, deliberately        │ code
+  │   detect_hard_credentials     regex, deliberately         │ code
   │   assess_eligibility           quotes the posting         │ LIGHT
-  │   extract_jd_profile           what it asks for           │ LIGHT
+  │   extract_jd_profile           what it asks for, plus     │ LIGHT
+  │                                place / type / level /     │
+  │                                years / pay                │
   └───────────────────────────────────────────────────────────┘
           │        keyword_extractor.extract_keywords (frequency)   code
           ▼
   ┌───────────────────────────────────────────────────────────┐
-  │ fit_gate.assess_prefit                                    │ LIGHT
+  │ fit_gate.check_hard_axes       your own requirements      │ code
+  │ fit_gate.assess_prefit         evidence coverage          │ LIGHT
   │   + profile.yaml target_roles  → floor/ceiling clamp      │ code
   │   + decisions.jsonl            → few-shot of your taste   │ code
   └───────────────────────────────────────────────────────────┘
           │
-          ├── unattended? ─► confirm_state / digest / bot_listener ─► you press a button
-          │                                                            (optional loop)
+          ├── unattended? ─► confirm_state / digest / channels/* ─► you approve
+          │                                                          (optional loop)
           ▼
   ┌───────────────────────────────────────────────────────────┐
   │ company_research.research_company   red flags, vocabulary │ HEAVY
@@ -59,9 +67,20 @@ spending model calls on postings you would not apply to.
   output/<Company>/  —  .docx, jd_profile.json, report
 ```
 
-`LIGHT` and `HEAVY` are the two backend roles in `llm_client.py`. Steps 1–7 are
-cheap enough to run on a free local model; 8–11 are where model quality shows up
-in what you send.
+`LIGHT` and `HEAVY` are the two backend roles in `llm_client.py`. Everything
+above the approval gate is cheap enough to run on a free local model; everything
+below it is where model quality shows up in what you send, and **none of it runs
+until you approve**.
+
+Two boundaries in that diagram are load-bearing:
+
+- **The tracker is an alternative way of arriving, not a second pipeline.** It
+  hands a posting to the same `cmd_tailor --auto` path a URL takes, in process,
+  so a fix to the fit gate or to the edit validators applies to both.
+- **`check_hard_axes` is code and `assess_prefit` is a model, on purpose.**
+  Whether a posting is in a city you would move to or pays above your floor is
+  arithmetic; a model asked to weigh that alongside everything else discounts
+  it, and reports a confident sentence about a job in the wrong hemisphere.
 
 ## Modules
 
@@ -69,10 +88,37 @@ in what you send.
 
 | file | role |
 |---|---|
-| `run.py` | the CLI: `tailor`, `bootstrap`, `polish`, `review`, `digest`, `pending`, `doctor`, `decisions`. Orchestration lives here and only here. |
+| `run.py` | the CLI: `setup`, `watch`, `tailor`, `bootstrap`, `polish`, `review`, `inbox`, `digest`, `pending`, `doctor`, `decisions`. Orchestration lives here and only here. |
+| `setup_wizard.py` | `run.py setup`: six stages, each writing only the keys it owns. |
 | `bot_listener.py` | long-polls Telegram for approve/skip presses. Optional. |
 | `pagefit.py` | also a CLI (`pagefit.py --grant`, `pagefit.py file.docx`) for the Word measurement. |
 | `validate.py` | also a CLI, for checking a generated .docx against the template. |
+
+### Finding postings
+
+| file | role |
+|---|---|
+| `tracker/__init__.py` | the source registry. Imports nothing at module level: `jd_extractor` imports `tracker.jsonld`, so a top-level import would close that cycle. |
+| `tracker/posting.py` | `Posting` — the one shape every source normalises to. |
+| `tracker/sources/base.py` | the contract: `check_auth`, `fetch`, `describe`. Plus the shared HTTP manners and `normalise_employment`. |
+| `tracker/sources/*.py` | one file per source. `remotive.py` is the shortest complete one; `linkedin.py` is deliberately an interface with no implementation. |
+| `tracker/jsonld.py` | schema.org `JobPosting`, read out of a page's own markup. Used by the tracker **and** by `jd_extractor`, because it is the only non-guessing source of a posting's location, type, pay and years. |
+| `tracker/jd_lookup.py` | URL → posting body, cheapest route first. No browser rung, on purpose. |
+| `tracker/dedupe.py` | two layers of "seen it", plus the `_filtered` bucket a rejected posting goes into instead of the seen one. |
+| `tracker/relevance.py` | the cheap filter in front of the queue. Fails open. |
+
+See [tracker.md](tracker.md) and [../tracker/CHANNELS.md](../tracker/CHANNELS.md).
+
+### Telling you about it
+
+| file | role |
+|---|---|
+| `channels/base.py` | the contract: `is_configured`, `status_line`, `_send_text`, `reply_hint`. Messages are composed once as Telegram-flavoured HTML; every other channel converts. |
+| `channels/local.py` | the default. `state/inbox.md` plus the console — no credentials, so the pipeline runs on a bare machine. |
+| `channels/telegram.py` | the only channel that can answer its own messages. |
+| `channels/discord.py`, `channels/email.py` | outbound only; the approval is a CLI command, which is why `reply_hint` is part of the interface. |
+| `channels/whatsapp.py` | interface only; the file says why. |
+| `notify.py` | composes the one report per posting and broadcasts it. |
 
 ### Who you are
 
@@ -200,6 +246,27 @@ Break these and the tool stops being trustworthy.
    `TG_CHAT_ID` come from the environment.
 10. **Nothing requires a specific vendor.** Any backend that can answer a prompt
    can drive the pipeline; a missing Ollama is not an error.
+11. **No job source and no notification channel is required.** Postings can
+   always arrive through `--url` or `--jd-file`, and the approval queue can
+   always be read with `run.py inbox` and answered with `run.py pending`. A
+   feature that only works with an account somewhere is a feature most people
+   will never reach.
+12. **Filtering fails open; only a list you wrote yourself fails closed.** Every
+   failure in `tracker/relevance.py` lets the posting through, and every
+   mismatch in `fit_gate.check_hard_axes` sorts a posting lower while naming its
+   reason. The one place that drops a posting silently is
+   `tracker.block_titles` / `block_companies`, and it ships empty — a false
+   positive costs one line in a digest, a false negative costs a job you never
+   heard about.
+13. **An axis nobody set is not screened.** An empty field in `profile.yaml`
+   means the pipeline does not reason about it, never that it guesses. The
+   opposite — a default that quietly filters — is how the first version applied
+   the example profile's product/strategy role list to every posting a new user
+   ever saw.
+14. **A source that cannot run says so, loudly.** `check_auth` makes a real
+   request where it can, because an empty result is indistinguishable from a
+   quiet day: one placeholder board token was polled every two minutes for a
+   week and reported throughout as "no new postings".
 
 ## Changing things
 

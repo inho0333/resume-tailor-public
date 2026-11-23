@@ -5,6 +5,18 @@ Running it day to day, and running it unattended.
 ## Commands
 
 ```bash
+# first-time setup, and redoing one part of it
+.venv/bin/python run.py setup
+.venv/bin/python run.py setup --only sources
+
+# poll the job sources and queue what is new
+.venv/bin/python run.py watch
+.venv/bin/python run.py watch --source greenhouse
+.venv/bin/python run.py watch --recheck-filtered   # after changing your profile
+
+# read the approval queue in the terminal — needs no notification channel
+.venv/bin/python run.py inbox
+
 # tailor for one posting (interactive)
 .venv/bin/python run.py tailor --url "https://..." --company "Acme" --role "Summer Associate"
 
@@ -24,7 +36,7 @@ Running it day to day, and running it unattended.
 # send the queued approval requests now, instead of at the next digest hour
 .venv/bin/python run.py digest
 
-# what is waiting for approval, and build or skip one without Telegram
+# what is waiting for approval, and build or skip one from the terminal
 .venv/bin/python run.py pending
 .venv/bin/python run.py pending --make 5d96906653
 
@@ -56,8 +68,40 @@ and they only start when you approve:
 .venv/bin/python run.py pending --skip <id>  # pass on it (recorded in the journal)
 ```
 
-Pressing ✅ in Telegram does exactly what `--make` does. Telegram is the
-convenience, not the mechanism.
+Pressing ✅ in Telegram does exactly what `--make` does. A notification channel
+is the convenience, not the mechanism — `run.py inbox` reads the same queue with
+nothing configured anywhere.
+
+## The page-count measurement, per platform
+
+| | how the page count is decided |
+|---|---|
+| macOS with Microsoft Word | **measured**, by driving Word through AppleScript (`pagefit.py`). Run `pagefit.py --grant` once to clear Word's file-access dialog, which otherwise waits for a click nobody is there to make. |
+| Windows or WSL with Word | **measured**, through `word_pagecount.ps1`. `validate._word_page_count` tries the AppleScript route first and this one second, so nothing needs configuring. |
+| anything else | **estimated**, against your own template measured with the same estimator. Usually right; it cannot resolve the boundary. Open the finished .docx once before you send it. |
+
+LibreOffice is deliberately not used, even when installed: without Calibri it
+renders a confirmed one-page document as two, so its verdict is worse than the
+estimate. Installing a metric-compatible substitute (Carlito) improves its
+rendering but not enough to trust the page count to it.
+
+## Where approval requests go
+
+`channels/` holds one module per destination, and **none of them is required**.
+With nothing configured, requests are appended to `state/inbox.md` and read with
+`run.py inbox`.
+
+```bash
+.venv/bin/python run.py doctor        # prints every channel and what it needs
+```
+
+Only Telegram can answer its own messages, which is why it is the one with a
+listener. Discord and email are outbound only: a request that arrives there
+carries the exact `run.py pending --make <id>` command that answers it, built
+from the same ids the buttons would have used.
+
+Set `notify_channels` in `user_config.yaml`, or leave it at `[auto]` — the local
+inbox plus every channel whose credentials are present in the environment.
 
 ## What a run produces
 
@@ -96,9 +140,33 @@ never stops the run: it is context for a human, not an input to the résumé.
 
 ## Running unattended
 
-Only needed if something hands postings to this tool automatically. Three parts.
+Two independent halves, and each works without the other: something to find
+postings (`run.py watch`), and something to tell you about them (a channel plus
+`bot_listener.py`). Neither is required — you can run `tailor` by hand and read
+the queue with `inbox`.
 
-### 1. The listener
+### 1a. The watch
+
+```bash
+.venv/bin/python run.py watch        # one tick; schedule this
+```
+
+Schedule it however your machine schedules things — launchd on macOS, cron or a
+systemd timer elsewhere. Anything from a few minutes to hourly is reasonable,
+since the digest batches the results anyway.
+
+**The trap worth knowing before you schedule it:** a launchd job's `PATH` is
+`/usr/bin:/bin:/usr/sbin:/sbin`, and Homebrew is not on it. A Node-based CLI
+like Trackly's then fails **only** under the scheduler, because both the binary
+and its `#!/usr/bin/env node` shebang resolve through `PATH` — testing it by
+hand always passes, which makes it a genuinely confusing hour. Sources that
+shell out pass an explicit `PATH`; if you add one, do the same.
+
+The first tick of a new source marks everything it can see as already seen and
+sends nothing, so switching one on does not fire one notification per posting in
+its whole index.
+
+### 1b. The listener
 
 `bot_listener.py` polls Telegram in a loop and does five things: handles button
 callbacks, expires stale requests, sends the approval digest, writes a
@@ -144,7 +212,8 @@ that would have complained was also broken.
 ### 3. The approval loop
 
 ```
-posting arrives → eligibility + fit judged (light backend, seconds)
+posting arrives → run.py watch, or tailor --auto, or an upstream watcher
+                → eligibility + hard axes + fit judged (light backend, seconds)
                 → confirm_state.register()  … the posting text is stored with it
                 → queued
      at digest_hours → one message, one row per posting, buttons per row
@@ -165,10 +234,18 @@ Three settings in `user_config.yaml` shape this:
   shaped this setting, most low-tier requests expired unanswered: they were roles
   that were never going to be applied to, and each one still cost a message.
 
-Every button press and every expiry goes into `state/decisions.jsonl`, and
-`fit_gate` feeds that history back into the next fit judgment as examples. The
-longer you use it, the more the fit judgment matches your actual taste — so
-pressing ⏭️ is worth more than ignoring a message.
+Every button press and every expiry goes into `state/decisions.jsonl`, and two
+things read that history back: `fit_gate`, as examples in the next fit judgment,
+and `tracker/relevance.py`, as examples in the filter in front of the queue. The
+longer you use it, the more both match your actual taste — so pressing ⏭️ is
+worth more than ignoring a message.
+
+The journal records the location, employment type, level and years required of
+each posting alongside the decision. It did not at first, and the consequence
+was that a preference held consistently for months — "I skip everything outside
+the Bay Area" — could never be read back out of it, because the only fields
+stored were the degree and visa flags. Fields are only ever added there; the
+tracker's filter reads the same file.
 
 ## Watching what it costs
 

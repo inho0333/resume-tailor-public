@@ -1,0 +1,51 @@
+# role_styles.yaml — sentence-shape rules for a family of roles.
+#
+# Some screening conventions are real but narrow: product-management screens
+# genuinely reward a bullet that opens with the thing you built, and the same
+# advice applied to an investing or research role produces nonsense.
+#
+# This file is where those conventions live. One entry per role family, matched
+# against the posting's title and track; the rules of the first matching family
+# are added to the rewrite prompt, and nothing is added when none matches.
+#
+# WHY IT IS A FILE AND NOT CODE. The Product Manager entry below used to be
+# rule 5 of the rewrite prompt, introduced with "per an MBA programme career
+# centre's feedback" — one person's coaching, shipped to everyone as a universal
+# rule, firing on any product-family posting no matter whose profile was loaded.
+#
+# It ships populated because the advice is sound for that family and because
+# removing it silently would change the output of every product-role draft. If
+# you disagree with it, delete the entry: an empty `families:` list is a
+# supported configuration and simply adds nothing to the prompt.
+#
+# This file IS committed — it describes hiring conventions, not you. Nothing
+# personal belongs in it.
+
+families:
+  - name: Product Manager
+    # Lowercase substrings, matched against the role title and then the track.
+    # Keep them short: "product manage" catches "Product Management Intern" and
+    # "Product Manager, Payments".
+    match:
+      - product manage
+      - product owner
+      - product lead
+      - technical program manage
+    rules:
+      - >-
+        The lead verb must be one that says "what you built"
+        (Built/Developed/Launched/Shipped/Designed/Authored/Re-engineered/Redesigned/
+        Established/Delivered/Engineered/Co-founded and the like).
+      - >-
+        That "thing you built" must come in the verb phrase at the very front of the
+        sentence. Do not lead with the analysis or the cause as in "Identified X, and
+        built Y"; put the output first, as in "Built Y by identifying X" or "Built Y, ...".
+      - >-
+        **Lead-verb variety (strict)**: across all the bullets you rewrite in this
+        response, do not use the same lead verb (by root — Built and Build count as the
+        same) more than twice. Do not treat "Built" as a default because it is easy; pick
+        the verb that matches each bullet's actual action — Designed/Sourced for investing
+        and sourcing, Launched/Authored for initiating and spreading something,
+        Re-engineered/Redesigned for improvement and redesign, Established/Co-founded for
+        a new organisation or service. Repetition is allowed as an exception only when the
+        outputs genuinely overlap and there is no alternative.

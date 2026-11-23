@@ -2,7 +2,7 @@
 (✅ Make the resume / ⏭️ Skip).
 
 Unlike `run.py tailor --auto` (a 2-minute poll, triggered by an upstream job
-watcher that is not part of this repo), this one has to be running at all times,
+`run.py watch`), this one has to be running at all times,
 so it runs as its own launchd job with KeepAlive — see
 `com.local.confirm-bot-listener.plist`.
 
@@ -162,12 +162,18 @@ def _prune_expired():
 
 
 def _write_heartbeat():
-    """Liveness signal. An upstream job watcher (a 2-minute poll in **its own
-    virtualenv**, not part of this repo) raises an alert when the ts in this file stops
-    advancing — once an auto-sync broke this project's virtualenv and the listener
-    failed to poll 11 times in a row with a certifi error, and nothing anywhere told
-    the user. When the listener is dead, pressing ✅ does nothing at all and there is
-    no way to find that out."""
+    """Liveness signal: whatever supervises this should alert when the timestamp
+    stops advancing.
+
+    Watch it from **a different Python environment than this project's venv**.
+    The failure this guards against is that venv itself breaking: an auto-sync
+    once removed a dependency, the listener failed eleven polls in a row with a
+    certificate error, and nothing said so — because anything inside the same
+    venv that would have complained was equally broken. A dead listener means
+    pressing ✅ does nothing at all, with no way to find that out.
+
+    `run.py inbox` and `run.py pending --make <id>` need no listener, which is
+    the reason that path exists."""
     try:
         os.makedirs(config.STATE_DIR, exist_ok=True)
         tmp = config.LISTENER_HEARTBEAT_PATH + ".tmp"

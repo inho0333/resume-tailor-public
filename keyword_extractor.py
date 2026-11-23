@@ -36,8 +36,32 @@ per hour hourly rate benefit benefits insurance holiday holidays paid sick time
 apply applying application applications submit submitting accept agree policy privacy legal
 right rights reserve reserves modify change notice without regard county state federal law laws
 records record criminal arrest conviction unincorporated fair chance ordinance employer employers
-new york los angeles san francisco seattle washington california
 """.split())
+
+# Place names are noise in an ATS keyword list — a posting repeats its own city, and
+# "london" is not a skill anyone matches on. But which places appear depends on where
+# you are looking, and the list here used to be five US cities, so a posting in
+# London, Tokyo or Bangalore leaked its city straight into the top keywords while a
+# posting in Seattle did not.
+#
+# So the places are taken from the search itself: the locations in profile.yaml, plus
+# whatever location this posting states. Nothing is hardcoded, and a user who sets no
+# locations loses only this filter, not the extraction.
+def _place_words(extra_places=()):
+    import profile as profile_module
+    try:
+        places = list(profile_module.get().locations)
+    except Exception:
+        # Keyword extraction must survive a missing or broken profile.yaml: it is
+        # pure counting and has no opinion about the person.
+        places = []
+    places += [p for p in extra_places if p]
+    words = set()
+    for place in places:
+        for word in re.split(r"[^a-zA-Z]+", str(place).lower()):
+            if len(word) > 2:
+                words.add(word)
+    return words
 
 # Phrases of 1-3 words are extracted, but a phrase is dropped if any of its words is a stopword.
 _MAX_NGRAM = 3
@@ -58,24 +82,52 @@ def _tokenize(text):
     return [_NORMALIZE.get(t, t) for t in tokens]
 
 
-def extract_keywords(text, top_n=15, min_count=2):
+def acronyms(text):
+    """Short tokens the posting itself writes in capitals: AI, ML, QA, UX, SRE, ETL.
+
+    A single token of two characters or fewer is otherwise dropped, as a blunt
+    second line of defence behind the stopword list. On an AI posting that filter
+    deletes the most important keyword there is: measured on a realistic one, "AI"
+    appeared eleven times and "ML" five, and neither reached the keyword list at
+    all — while "building" and "production" did.
+
+    Taking the exemption from the posting's own capitalisation rather than from a
+    list of known acronyms means this works for whatever the field happens to
+    call things, and it still excludes ordinary short words, which a posting does
+    not write in capitals.
+    """
+    found = set()
+    for word in re.findall(r"\b[A-Z][A-Za-z/&-]{0,5}\b", text or ""):
+        bare = word.replace("-", "").replace("/", "").replace("&", "")
+        # All-caps, and not a one-letter initial.
+        if len(bare) >= 2 and bare.isupper():
+            found.add(word.lower())
+    return found
+
+
+def extract_keywords(text, top_n=15, min_count=2, places=()):
     """Returns: [(term, count), ...] — count descending; on a tie, phrases beat single words.
 
     Why min_count=2 is the default: the requirement itself — "words repeated several times" —
     acts as the filter. Legal boilerplate sentences are almost never repeated within a JD, so
     this threshold alone naturally screens out most of them (the stopword list does not have
     to be perfect).
+
+    places: extra place names to treat as noise, normally this posting's own stated
+    location. The ones from profile.yaml are added automatically.
     """
     tokens = _tokenize(text)
     n = len(tokens)
+    stopwords = STOPWORDS | _place_words(places)
+    short_ok = acronyms(text)
 
     counts = Counter()
     for size in range(1, _MAX_NGRAM + 1):
         for i in range(n - size + 1):
             gram_tokens = tokens[i : i + size]
-            if any(t in STOPWORDS for t in gram_tokens):
+            if any(t in stopwords for t in gram_tokens):
                 continue
-            if size == 1 and len(gram_tokens[0]) <= 2:
+            if size == 1 and len(gram_tokens[0]) <= 2 and gram_tokens[0] not in short_ok:
                 continue
             counts[" ".join(gram_tokens)] += 1
 

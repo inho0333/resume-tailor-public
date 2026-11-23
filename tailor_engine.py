@@ -5,6 +5,7 @@ import ask
 import keyword_extractor
 import profile as profile_module
 import resume_db
+import role_styles
 
 
 def _parse_json_response(raw_text):
@@ -69,8 +70,8 @@ PIVOT_GUIDANCE = """\
 Compare the candidate's DB (organisations, roles, keywords) with this JD's role and industry,
 judge for yourself whether the candidate is changing role or changing industry on this
 application, and pick each bullet's lead element (the information that comes first in the
-sentence) by the rules below. In any bullet where rule 5 below (PM bullet style) applies,
-rule 5 always wins — apply this table only where it does not conflict with rule 5.
+sentence) by the rules below. Where rule 5 below carries role-family conventions for this
+posting, those win — apply this table only where it does not conflict with them.
 - Role changes only (same industry): lead with How (the transferable skill)
 - Industry changes only (same role): lead with the Result, or with Why (a similar situation)
 - Both change: How first, then What/Why
@@ -81,7 +82,7 @@ narrative.
 
 
 SELECT_PROMPT_TEMPLATE = """\
-You are a career coach assembling {applicant_phrase}'s résumé for one specific job
+You are a career coach assembling the résumé of {applicant_phrase} for one specific job
 posting (JD). Right now you are at the stage of **choosing which experiences go on the page**
 — rewriting the sentences happens in the next stage.
 
@@ -150,7 +151,7 @@ they are explanations a person reads, and gaps are surfaced verbatim in a notifi
 
 
 REWRITE_PROMPT_TEMPLATE = """\
-You are a career coach polishing {applicant_phrase}'s résumé for one specific job
+You are a career coach polishing the résumé of {applicant_phrase} for one specific job
 posting (JD). Which bullets go on the page has already been decided — your job is to
 **rewrite every one of the [Bullets to rewrite] below, one by one**.
 
@@ -259,23 +260,12 @@ Using the information above, do the following:
      the scope" and "blocked the reduction" are the same fact, so put it in one clause only.
      Before adding a clause, ask yourself "is there new information the reader would miss
      without this clause?" — if not, delete it.
-5. If the role in [JD ideal-candidate analysis] is in the Product Manager/PM family (per an MBA
-   programme career centre's feedback), keep the following in every bullet you rewrite:
-   - The lead verb must be one that says "what you built" (Built/Developed/Launched/Shipped/
-     Designed/Authored/Re-engineered/Redesigned/Established/Delivered/Engineered/Co-founded and
-     the like).
-   - That "thing you built" must come in the verb phrase at the very front of the sentence. Do
-     not lead with the analysis or the cause as in "Identified X, and built Y"; put the output
-     first, as in "Built Y by identifying X" or "Built Y, ...".
-   - **Lead-verb variety (strict)**: across all the bullets you rewrite in this response, do not
-     use the same lead verb (by root — Built and Build count as the same) more than twice. Do
-     not treat "Built" as a default because it is easy; pick the verb that matches each bullet's
-     actual action — Designed/Sourced for investing and sourcing, Launched/Authored for
-     initiating and spreading something, Re-engineered/Redesigned for improvement and redesign,
-     Established/Co-founded for a new organisation or service. Repetition is allowed as an
-     exception only when the outputs genuinely overlap and there is no alternative.
+5. Conventions for this family of roles, where there are any. This block is empty for a
+   role no family in role_styles.yaml matches, and then there is nothing extra to apply.
+{role_style_block}
 6. **Absolutely no em dash (—) (whatever the role; highest priority)**: do not use an em dash
-   (—) anywhere in the bullets you rewrite. It reads as AI-written, and the user has banned it.
+   (—) anywhere in the bullets you rewrite. It reads as AI-written, and this project does
+   not use it.
    To join clauses, rewrite readably with a comma, a full stop (splitting the sentence), a
    semicolon, a colon, or a connecting structure such as "by/after/so" or a participial phrase.
    The en dash (–) in a date range is fixed template wording and is exempt. Even if the input
@@ -482,6 +472,7 @@ def rewrite_bullets(backend, jd_profile, db_sections, selected, keyword_counts=N
         jd_profile_json=json.dumps(jd_profile, ensure_ascii=False, indent=2),
         track_guidance=TRACK_GUIDANCE.get(track, TRACK_GUIDANCE["General"]),
         pivot_guidance=PIVOT_GUIDANCE,
+        role_style_block=role_styles.guidance_block((jd_profile or {}).get("role"), track),
         keyword_blob=keyword_extractor.format_for_prompt(keyword_counts or []),
         db_blob=resume_db.to_rewrite_blob(db_sections, selected_ids),
         extra_facts_section=extra_facts_section,
@@ -628,7 +619,7 @@ def format_review(result, db_sections):
 
 def review_and_confirm(result, db_sections, auto=False):
     """Get a person's approval right before the build. In auto mode (an unattended run triggered
-    by an upstream job watcher, not part of this repo) it only prints and always approves (the
+    by `run.py watch`) it only prints and always approves (the
     same intent as the fast-track in the original design notes — there is nobody waiting).
     Returns: True (approved, carry on) / False (cancelled)."""
     print("\n" + format_review(result, db_sections))
@@ -737,7 +728,7 @@ def apply_section_labels(sections, db_sections):
 def run_gap_qa(gaps):
     """Print the gap list and take an answer for each one from the user (Enter = skip).
     Interactive only — never called in auto mode (an unattended run triggered by an upstream job
-    watcher, which is not part of this repo), because there is nobody there to answer and it
+    watch tick), because there is nobody there to answer and it
     would simply hang (see the --auto branch in run.py)."""
     if not gaps:
         return {}

@@ -75,6 +75,63 @@ BASE_RESUME_PATH = _path(_user.get("base_resume_path"))
 # the run.
 SYNC_DIR = _path(_user.get("sync_dir"))
 
+# Lines on your résumé whose wording and order are settled, and which no edit,
+# swap or automatic compression may touch. A "Skills:" line has a chosen order
+# and composition; a model shortening it to save a line destroys that.
+#
+# These were hardcoded as exactly ("Skills:", "Languages:") and consulted in a
+# dozen places, so a résumé whose line reads "Technical Skills:", "SKILLS:" or
+# "Tools:" had no protection at all and was silently reworded. `run.py setup`
+# fills this in from the labelled lines it finds in your own document.
+PROTECTED_PREFIXES = tuple(_user.get("protected_prefixes")
+                           or ("Skills:", "Languages:"))
+
+# ── the tracker: where postings are found ───────────────────────────────────
+#
+# Which sources to poll, and how each is configured. Empty — the default — means
+# `run.py watch` has nothing to do and says so; postings then arrive the way
+# they always did, through `tailor --url` or `--jd-file`.
+#
+# Shape, per source (see tracker/CHANNELS.md and docs/tracker.md):
+#   tracker:
+#     sources: [greenhouse, muse]
+#     greenhouse:
+#       companies: [{name: Acme, board_token: acme}]
+#     muse:
+#       categories: ["Product Management"]
+#       levels: ["Mid Level"]
+_tracker = _user.get("tracker") or {}
+
+TRACKER_SOURCES = _tracker.get("sources") or []
+
+
+def tracker_settings(name):
+    """The settings block for one source. {} when it has none."""
+    return _tracker.get(name) or {}
+
+
+# The relevance filter in front of the queue (tracker/relevance.py). On by
+# default: a source's own filters are coarse, and the alternative is a digest
+# with fifty questions in it. It fails open, so turning it off only means more
+# postings reach the queue, never fewer.
+TRACKER_RELEVANCE_FILTER = _tracker.get("relevance_filter", True)
+
+# Titles and companies you never want to see. The tracker's one fail-closed
+# step, so it starts empty and stays yours. Lowercase substring match.
+TRACKER_BLOCK_TITLES = _tracker.get("block_titles") or []
+TRACKER_BLOCK_COMPANIES = _tracker.get("block_companies") or []
+
+# ── where approval requests go ──────────────────────────────────────────────
+#
+# A list of channel names from channels/ — telegram, discord, email, local — in
+# the order you want them tried. ["auto"], the default, means the local inbox
+# plus every channel whose credentials are present in the environment, so an
+# existing Telegram setup keeps working with nothing set here.
+#
+# No channel is required: with none configured, requests land in
+# state/inbox.md and `run.py pending --make <id>` answers them.
+NOTIFY_CHANNELS = _user.get("notify_channels") or ["auto"]
+
 # ── LLM backends ────────────────────────────────────────────────────────────
 #
 # See llm_client.py for what the roles mean. "auto" picks from what this machine
@@ -144,6 +201,19 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b")
 # machine runs out of memory (the symptom is Ollama killing the request).
 OLLAMA_HEAVY_OPTIONS = _user.get("ollama_heavy_options") or {
     "num_ctx": 32768, "num_predict": 8192,
+}
+
+# Generation budget for the LIGHT steps on a local model. vendor/ollama_client's
+# own default (8192/2048) was calibrated against a smaller posting-analysis
+# schema; that schema now also asks for the location, employment type, level,
+# years and pay the fit gate screens on, and a reasoning model spends its budget
+# on thinking before it answers. Measured on a realistic posting with the old
+# budget: 9,297 characters of thinking and an empty answer, so the step was lost.
+#
+# This is still an order of magnitude below the heavy budget, so it costs little
+# on a machine that can run the model at all.
+OLLAMA_LIGHT_OPTIONS = _user.get("ollama_light_options") or {
+    "num_ctx": 16384, "num_predict": 4096,
 }
 
 # A heavy rewrite genuinely takes minutes. Lower this and you will cancel work

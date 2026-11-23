@@ -38,20 +38,37 @@ import recruiter_review
 import resume_db
 import resume_parser
 import resume_writer
+import setup_wizard
 import tailor_engine
 import validate
 
 
 def _get_jd_text(args):
+    """The posting text, and whatever the page published about itself.
+
+    Returns (text, facts). `facts` is the page's own schema.org JobPosting block
+    (location, employment type, salary range, years required) and is empty for a
+    pasted or file-supplied posting, where there is no page to read it from.
+    """
+    # The tracker calls cmd_tailor in process, with the posting it already has.
+    # It used to be a subprocess in a second repo with its own virtualenv,
+    # handing the body over through a temp file; this is the same pipeline
+    # reached without any of that.
+    if getattr(args, "jd_text", None):
+        return args.jd_text, (getattr(args, "jd_facts", None) or {})
+
     if args.jd_file:
         with open(args.jd_file, "r", encoding="utf-8") as f:
-            return f.read()
+            return f.read(), {}
 
     if args.url:
         print(f"Fetching the posting page: {args.url}")
-        text = jd_extractor.fetch_jd_text_from_url(args.url)
-        if text:
-            return text
+        fetched = jd_extractor.fetch_jd(args.url)
+        if fetched["text"]:
+            if fetched["facts"]:
+                stated = ", ".join(sorted(fetched["facts"]))
+                print(f"  the page states: {stated}")
+            return fetched["text"], fetched["facts"]
         if getattr(args, "auto", False):
             raise RuntimeError("Could not extract the JD body from the URL (likely a "
                                "JS-rendered or login-walled page) — auto mode cannot fall "
@@ -68,7 +85,7 @@ def _get_jd_text(args):
     if not pasted.strip():
         print("The JD is empty. Exiting.")
         sys.exit(1)
-    return pasted
+    return pasted, {}
 
 
 def _clamp_to_caps(sections_dict, caps):
@@ -449,10 +466,17 @@ def _validate_inputs(resume_path):
             f"no experience DB at {config.DB_PATH} — run "
             "'python run.py bootstrap --resume <your_resume.docx>' first."
         )
-    # profile.example.yaml copied and never edited: the eligibility screen, the fit judgment
-    # and the recruiter review would all run on a fictional person and still report PASS. It is
-    # checked here rather than only in `doctor` because nobody runs `doctor` after the first day.
-    stale_identity = profile_module.get().unedited_identity_fields()
+    # A profile that describes nobody: either never answered, or still carrying
+    # profile.example.yaml's fictional person. Either way the eligibility screen,
+    # the fit judgment and the recruiter review would all run on someone who does
+    # not exist and still report PASS. Checked here rather than only in `doctor`
+    # because nobody runs `doctor` after the first day.
+    empty_identity, stale_identity = profile_module.get().blocking_identity_problems()
+    if empty_identity:
+        raise errors.SetupError(
+            "profile.yaml has nothing in: " + ", ".join(empty_identity)
+            + "\nEvery judgment this tool makes is about a person, and these are the fields "
+              "that say who. Fill them in with `python run.py setup --only identity`.")
     if stale_identity:
         raise errors.SetupError(
             "profile.yaml still has profile.example.yaml's values for: "
@@ -532,7 +556,8 @@ def _send_confirmation_request(company, role, url, eligibility, jd_profile, pend
     reason = (eligibility or {}).get("reasoning") or ""
     lines.append(verdict_label + (f"\n{notify.esc(notify.clip(reason, 180))}" if reason else ""))
 
-    if eligibility and eligibility.get("sponsorship_excluded"):
+    if (eligibility and eligibility.get("sponsorship_excluded")
+            and profile_module.get().sponsorship_exclusion_matters):
         quote = (eligibility.get("sponsorship_quote") or "").strip()
         lines.append("⚠️ <b>Posting states applicants needing sponsorship are not eligible</b>"
                      "\n" + notify.esc(notify.clip(quote, 200)))
@@ -613,7 +638,7 @@ def cmd_tailor(args):
         report = notify.Report(args.company, args.role, url=getattr(args, "job_url", None))
 
     try:
-        jd_text = _get_jd_text(args)
+        jd_text, jd_facts = _get_jd_text(args)
 
         print("\nChecking whether the applicant's degree qualifies...")
         eligibility = jd_extractor.assess_eligibility(backend, jd_text)
@@ -641,14 +666,21 @@ def cmd_tailor(args):
         if eligibility.get("visa_caution"):
             print(f"  [work authorisation] {(eligibility.get('visa_note') or '').strip()}")
         if eligibility.get("sponsorship_excluded"):
-            print("  [sponsorship] this posting states applicants who need sponsorship are "
-                  "not eligible (an internship under the applicant's own authorisation may "
-                  "still be possible, but the post-graduation path is closed; see "
-                  "profile.yaml)")
+            # Phrased by what the profile says. This line used to explain the
+            # consequence for a student on their own work authorisation to
+            # everybody, including people nine years into a career who had
+            # stated they need no sponsorship at all.
+            if profile_module.get().sponsorship_exclusion_matters:
+                print("  [sponsorship] this posting states that applicants who need "
+                      "sponsorship are not eligible — see authorization in profile.yaml")
+            else:
+                print("  [sponsorship] the posting says it does not sponsor; your profile "
+                      "says you need none, so this is noted and not a concern")
             print(f"    quoted: \"{eligibility.get('sponsorship_quote', '')}\"")
 
         print("\nAnalysing the posting (what candidate it is describing)...")
-        jd_profile = jd_extractor.extract_jd_profile(backend, jd_text)
+        jd_profile = jd_extractor.extract_jd_profile(backend, jd_text,
+                                                    facts=jd_facts)
 
         company = args.company or jd_profile.get("company") or "Unknown"
         role = args.role or jd_profile.get("role") or "Unknown"
@@ -659,7 +691,8 @@ def cmd_tailor(args):
         print(f"  company: {company} / role: {role}")
         print(f"  key terms (LLM's reading): {', '.join(jd_profile.get('keywords', [])[:8])}")
 
-        keyword_counts = keyword_extractor.extract_keywords(jd_text)
+        keyword_counts = keyword_extractor.extract_keywords(
+            jd_text, places=[jd_profile.get("location")])
         print("  repeated terms (by frequency, for ATS matching): " +
               ", ".join(f"{t}×{c}" for t, c in keyword_counts[:10]))
 
@@ -1021,8 +1054,190 @@ def cmd_pending(args):
         prefit = (record.get("prefit") or {}).get("tier")
         print(f"  {short_id}  {record.get('company')} · {record.get('role')}"
               + (f"  [fit: {prefit}]" if prefit else ""))
-    print("\n  build one:  python run.py pending --make <id>"
-          "\n  pass on it: python run.py pending --skip <id>")
+    print("\n  read them:   python run.py inbox      (fit, place, pay, what does not match)"
+          "\n  build one:   python run.py pending --make <id>"
+          "\n  pass on it:  python run.py pending --skip <id>")
+
+
+def _tailor_args(posting):
+    """A cmd_tailor argument set for one posting the tracker found.
+
+    `--auto` is the whole point: it stops at the approval gate, so nothing
+    expensive runs until a person says so. The tracker therefore spends one
+    light-backend pass per posting and no more.
+    """
+    return argparse.Namespace(
+        jd_text=posting.text, jd_facts=_facts_for_pipeline(posting),
+        jd_file=None, url=None, job_url=posting.url or None,
+        company=posting.company or None, role=posting.title or None,
+        auto=True, resume=None, backend=None, heavy_backend=None,
+        keep=[], no_recruiter=False,
+    )
+
+
+def _facts_for_pipeline(posting):
+    """The posting's stated facts, keyed the way jd_extractor expects them.
+
+    A source may carry extra keys of its own (`jd_via`, a raw salary string).
+    Only the ones the fit gate screens on are passed through, so a source
+    cannot invent a new axis by accident.
+    """
+    allowed = ("location", "work_arrangement", "employment_type", "comp_range",
+               "years_required", "comp_stated", "title", "company")
+    return {k: v for k, v in (posting.facts or {}).items() if k in allowed and v}
+
+
+def cmd_setup(args):
+    """The interactive first-time setup. See setup_wizard.py."""
+    sys.exit(setup_wizard.run_wizard(only=getattr(args, "only", None)))
+
+
+def cmd_watch(args):
+    """Poll the configured sources and queue what is new.
+
+    One tick does, per source: ask whether it can run at all, fetch what it can
+    see, drop what has been seen before, fill in a missing posting body from its
+    URL, ask the cheap relevance filter whether it is even the right kind of
+    work, and hand the survivors to the same approval queue `tailor --auto`
+    uses. Nothing is drafted here; that waits for your ✅.
+
+    The first tick of a new source is a baseline: everything it can currently
+    see is marked as seen and nothing is sent. Without that, turning on a source
+    means one notification per posting in its whole index.
+    """
+    import tracker
+    from tracker import dedupe, jd_lookup, relevance
+
+    names = [args.source] if args.source else list(config.TRACKER_SOURCES)
+    if not names:
+        print("No sources are configured, so there is nothing to watch.\n\n"
+              "  python run.py setup          # choose some\n"
+              "  tracker/CHANNELS.md          # what each one covers and costs\n\n"
+              "Postings can still arrive by hand: run.py tailor --url <posting url>")
+        return
+
+    state = dedupe.load()
+    queued = total_seen = 0
+    for name in names:
+        source = tracker.build(name, config.tracker_settings(name))
+        if source is None:
+            print(f"\n[{name}] not a known source. Known: "
+                  f"{', '.join(tracker.SOURCE_NAMES)}")
+            continue
+        if not source.implemented:
+            status = source.check_auth()
+            print(f"\n[{name}] {status.detail}")
+            if status.fix:
+                print(f"         {status.fix}")
+            continue
+
+        print(f"\n[{name}] checking...")
+        status = source.check_auth()
+        if not status.ok:
+            # A misconfigured source returning nothing is indistinguishable from
+            # a quiet day, and that is how one placeholder board token polled
+            # 404 every two minutes for a week while being reported as "no new
+            # postings". So this is loud, and it names the fix.
+            print(f"  cannot run: {status.detail}")
+            if status.fix:
+                print(f"  fix: {status.fix}")
+            continue
+        print(f"  {status.detail}")
+
+        if name == "apple":
+            # Apple needs a second request per posting for its body, so it is
+            # only made for postings that are actually new.
+            postings = source.fetch(
+                needs_detail=lambda pid: dedupe.is_new(state, name, pid))
+        else:
+            postings = source.fetch()
+        print(f"  {len(postings)} postings visible")
+
+        if dedupe.count(state, name) == 0 and postings:
+            dedupe.baseline(state, postings)
+            dedupe.save(state)
+            print(f"  first run: all {len(postings)} marked as already seen, nothing "
+                  f"sent. From the next run on, only new postings arrive.")
+            continue
+
+        for posting in postings:
+            if not dedupe.is_new(state, name, posting.id):
+                continue
+            total_seen += 1
+            if dedupe.is_duplicate(state, posting):
+                print(f"  = {posting.label} — already seen through another source")
+                dedupe.mark_seen(state, posting)
+                continue
+            if dedupe.was_filtered(state, posting) and not args.recheck_filtered:
+                dedupe.mark_seen(state, posting)
+                continue
+
+            if source.needs_jd_lookup or len(posting.text) < jd_lookup.MIN_USEFUL_LENGTH:
+                jd_lookup.fill(posting)
+
+            if relevance.enabled():
+                verdict = relevance.judge(posting)
+                if not verdict["related"]:
+                    print(f"  - {posting.label} — {verdict['why']}")
+                    # Recorded in its own bucket rather than as "seen", so a
+                    # better filter later can be told to reconsider
+                    # (`--recheck-filtered`). Marking it seen would burn it.
+                    dedupe.mark_filtered(state, posting, verdict["why"])
+                    dedupe.save(state)
+                    continue
+
+            if len(posting.text) < jd_lookup.MIN_USEFUL_LENGTH:
+                print(f"  ? {posting.label} — no readable posting body; queued without "
+                      f"a fit judgment worth trusting")
+
+            # Marked BEFORE the handoff: judging and queueing takes seconds to
+            # minutes, and a crash in the middle would otherwise re-notify
+            # everything on the next tick.
+            dedupe.mark(state, posting)
+            dedupe.save(state)
+            print(f"  + {posting.label}")
+            try:
+                cmd_tailor(_tailor_args(posting))
+                queued += 1
+            except Exception as e:  # noqa: BLE001 — one bad posting must not stop the tick
+                print(f"    could not queue it: {type(e).__name__}: {e}")
+
+    print(f"\n{queued} queued out of {total_seen} new posting(s).")
+    if queued:
+        if config.DIGEST_HOURS:
+            print(f"They are waiting for the digest ({config.DIGEST_HOURS}). "
+                  f"Read it now with: python run.py inbox")
+        else:
+            print("Read them with: python run.py inbox")
+
+
+def cmd_inbox(args):
+    """Print the approval queue the way a digest would read it, in the terminal.
+
+    `pending` prints ids and nothing else, which is what you want when you
+    already know which posting you mean. This prints the whole question — fit,
+    the reason, where the job is, what it pays, which of your own requirements
+    it fails — so the queue can be read and answered with no notification
+    channel configured at all. It is the local channel's counterpart: that one
+    writes requests to state/inbox.md as they arrive, this one shows what is
+    still open.
+
+    Sends nothing, marks nothing. Reading the queue must never consume it.
+    """
+    import channels
+    import digest
+
+    text, keyboard, asked, listed = digest.build(confirm_state.all_records(),
+                                                 include_sent=True)
+    if not text:
+        print("nothing is waiting for approval.")
+        return
+    print(channels.base.to_plain(text))
+    print()
+    print(channels.base.Channel.reply_hint(None, keyboard))
+    if listed and not args.all:
+        print(f"\n({len(listed)} of these are not being asked about — a weak fit or "
+              f"ineligible. They are listed above with no ✅.)")
 
 
 def cmd_decisions(args):
@@ -1293,6 +1508,24 @@ def _write_user_config(resume_path, sections):
         "resume_path": [f"resume_path: {json.dumps(resume_path, ensure_ascii=False)}"],
         "max_bullets_per_section": cap_lines,
     }
+    # The two keys minimal mode cannot run without, added only when the file does
+    # not already have them. This used to happen on the first-run branch alone,
+    # so a user_config.yaml that existed for any other reason — `run.py setup`
+    # writing a backend choice, or a hand-written file — came out of bootstrap
+    # with no base_resume_path, and the default mode then refused to run with a
+    # message about a setting nobody had been told to add.
+    existing_keys = set()
+    if os.path.exists(config.USER_CONFIG_PATH):
+        try:
+            with open(config.USER_CONFIG_PATH, "r", encoding="utf-8") as f:
+                existing_keys = set(yaml.safe_load(f) or {})
+        except (OSError, yaml.YAMLError):
+            existing_keys = set()
+    if "base_resume_path" not in existing_keys:
+        updates["base_resume_path"] = [
+            f"base_resume_path: {json.dumps(resume_path, ensure_ascii=False)}"]
+    if "tailor_mode" not in existing_keys:
+        updates["tailor_mode"] = ["tailor_mode: minimal"]
 
     if os.path.exists(config.USER_CONFIG_PATH):
         backup = config.USER_CONFIG_PATH + ".bak"
@@ -1303,8 +1536,8 @@ def _write_user_config(resume_path, sections):
         with open(config.USER_CONFIG_PATH, "w", encoding="utf-8") as f:
             f.write(patched)
         kept = [k for k in (yaml.safe_load(patched) or {}) if k not in updates]
-        print(f"\nUpdated {os.path.basename(config.USER_CONFIG_PATH)}: set resume_path and "
-              f"max_bullets_per_section, left your other {len(kept)} setting(s) and all "
+        print(f"\nUpdated {os.path.basename(config.USER_CONFIG_PATH)}: set "
+              f"{', '.join(updates)}, left your other {len(kept)} setting(s) and all "
               f"comments as they were"
               + (f" ({', '.join(sorted(kept))})" if kept else "")
               + f". Previous file saved as {os.path.basename(backup)}.")
@@ -1314,13 +1547,11 @@ def _write_user_config(resume_path, sections):
     # works without a second edit. Both keys are yours to change afterwards.
     with open(config.USER_CONFIG_PATH, "w", encoding="utf-8") as f:
         f.write("# Your settings. Gitignored: never committed, never shared.\n")
-        f.write("# `python run.py bootstrap` sets resume_path and max_bullets_per_section\n")
-        f.write("# and leaves every other line — including your comments — alone.\n")
+        f.write("# `python run.py setup` and `bootstrap` patch only the keys they own\n")
+        f.write("# and leave every other line — including your comments — alone.\n")
         f.write("# See user_config.example.yaml for every key and what it does.\n\n")
-        f.write("\n".join(updates["resume_path"]) + "\n")
-        f.write(f"base_resume_path: {json.dumps(resume_path, ensure_ascii=False)}\n")
-        f.write("tailor_mode: minimal\n")
-        f.write("\n".join(updates["max_bullets_per_section"]) + "\n")
+        for lines in updates.values():
+            f.write("\n".join(lines) + "\n")
 
 
 BASE_HEADER_COMMENT = """\
@@ -1526,8 +1757,13 @@ def cmd_doctor(args):
         # left at the example's values are blocking — the eligibility screen, the fit judgment
         # and the recruiter review would all run on a fictional person and still report PASS.
         # Preference fields (voice, target roles) only cost quality, so they warn.
-        stale_identity = prof.unedited_identity_fields()
+        empty_identity, stale_identity = prof.blocking_identity_problems()
         stale_prefs = prof.unedited_preference_fields()
+        if empty_identity:
+            record(_FAIL, "profile.yaml",
+                   "nothing filled in for: " + ", ".join(empty_identity),
+                   "python run.py setup --only identity — every judgment is about a "
+                   "person, and these say who")
         if stale_identity:
             record(_FAIL, "profile.yaml",
                    "still has profile.example.yaml's values for: " + ", ".join(stale_identity),
@@ -1538,11 +1774,26 @@ def cmd_doctor(args):
                    "still has profile.example.yaml's values for: " + ", ".join(stale_prefs),
                    "replace them with your own: style_examples sets the voice the model "
                    "copies, target_roles decides which postings survive the fit gate")
-        if not stale_identity and not stale_prefs:
+        if not empty_identity and not stale_identity and not stale_prefs:
             record(_WARN if missing else _OK, "profile.yaml",
-                   ("incomplete: " + ", ".join(missing)) if missing else
-                   f"{prof.program or 'degree'} / graduating {prof.graduation or '?'}",
+                   ("incomplete: " + ", ".join(missing)) if missing else prof.degree_label,
                    "fill in the listed fields in profile.yaml")
+        # What you are looking for, as the pipeline will read it. Printed because
+        # these are the values the fit gate screens on, and an axis nobody meant
+        # to set is otherwise invisible until postings start going missing.
+        if os.path.exists(prof.source):
+            requirements = prof.requirement_lines()
+            _line(_OK if prof.search_kind else _WARN, "search",
+                  "; ".join(requirements) if requirements
+                  else "nothing set — no posting is screened on type, place, level or pay")
+            if prof.search_kind == "internship" and not prof.target_term:
+                record(_WARN, "search.term", "an internship search with no term set",
+                       "set search.term (e.g. 'Summer 2027') so postings for the wrong "
+                       "year are not offered")
+            if prof.comp_floor and not prof.comp_floor.get("currency"):
+                record(_WARN, "search.comp_floor", "no currency",
+                       "set search.comp_floor.currency; a floor with no currency is never "
+                       "compared against a posting's range")
 
     if not os.path.exists(config.USER_CONFIG_PATH):
         record(_FAIL, "user_config.yaml", "missing",
@@ -1594,6 +1845,28 @@ def cmd_doctor(args):
             for status, detail, fix in _check_base_resume(base_yaml):
                 record(status, "base_resume.yaml", detail, fix)
 
+    # The lines on your résumé that no edit may touch. A label this does not
+    # match is reworded and reordered freely by the model, and a settled
+    # "Skills:" line is exactly the kind of thing that gets quietly shortened to
+    # win back a line.
+    if config.DEFAULT_RESUME_PATH and os.path.exists(config.DEFAULT_RESUME_PATH):
+        try:
+            doc = docx.Document(config.DEFAULT_RESUME_PATH)
+            labelled = [p.text.strip() for p in doc.paragraphs
+                        if re.match(r"^[A-Z][A-Za-z /&-]{1,24}:\s", p.text.strip())]
+            unmatched = [t.split(":")[0] + ":" for t in labelled
+                         if not t.startswith(tuple(config.PROTECTED_PREFIXES))]
+            if unmatched:
+                record(_WARN, "protected_prefixes",
+                       "your résumé has labelled lines that are not protected: "
+                       + ", ".join(sorted(set(unmatched))[:4]),
+                       "add them to protected_prefixes in user_config.yaml, or edits may "
+                       "reword and reorder those lines")
+            else:
+                record(_OK, "protected_prefixes", ", ".join(config.PROTECTED_PREFIXES))
+        except Exception as e:
+            record(_WARN, "protected_prefixes", f"could not read the résumé: {e}")
+
     print("\nLLM backends")
     availability = llm_client.available_backends()
     for name, ok in availability.items():
@@ -1617,17 +1890,45 @@ def cmd_doctor(args):
     if pagefit.word_available():
         record(_OK, "Microsoft Word", "page count is measured, not estimated")
     else:
+        soffice = shutil.which("soffice") or shutil.which("libreoffice")
         record(_WARN, "Microsoft Word", "not found",
-               "without Word the page count is an estimate and can be wrong at the "
-               "boundary; see SETUP.md")
+               "without Word the page count is estimated against the template and can be "
+               "wrong at the boundary; open the finished .docx once before you send it")
+        if soffice:
+            _line("--  ", "LibreOffice", soffice +
+                  " — not used for the page count: without Calibri it renders a correct "
+                  "one-pager as two pages, so its verdict is worse than the estimate")
 
-    print("\nNotifications (optional)")
-    from vendor import telegram
-    # Informational, never a warning: nothing here needs Telegram. It only adds
-    # approve/skip buttons on your phone.
-    _line(_OK if telegram.is_configured() else "--  ", "telegram",
-          "configured" if telegram.is_configured() else
-          "TG_BOT_TOKEN / TG_CHAT_ID unset — console only, approval buttons unavailable")
+    print("\nNotifications (optional — none is required)")
+    import channels
+    # Informational, never a failure. With nothing configured, requests land in
+    # state/inbox.md and `run.py inbox` reads them.
+    for row in channels.describe(config.NOTIFY_CHANNELS):
+        mark = _OK if row["selected"] else "--  "
+        suffix = " [in use]" if row["selected"] else ""
+        _line(mark, row["name"], row["detail"] + suffix)
+
+    print("\nJob sources (optional — postings can also arrive by hand)")
+    if not config.TRACKER_SOURCES:
+        _line("--  ", "tracker", "no sources configured; see tracker/CHANNELS.md")
+    else:
+        import tracker
+
+        for name in config.TRACKER_SOURCES:
+            source = tracker.build(name, config.tracker_settings(name))
+            if source is None:
+                record(_FAIL, name, "not a known source",
+                       f"known sources: {', '.join(tracker.SOURCE_NAMES)}")
+                continue
+            status = source.check_auth()
+            if status.unavailable:
+                record(_WARN, name, status.detail, status.fix)
+            elif status.ok:
+                record(_OK, name, status.detail)
+            else:
+                # Loud on purpose: a source that cannot run returns nothing, and
+                # nothing is indistinguishable from a quiet day.
+                record(_FAIL, name, status.detail, status.fix)
 
     if getattr(args, "probe", False):
         print("\nLive probe (one real call per role)")
@@ -1653,8 +1954,14 @@ def cmd_doctor(args):
         for w in warnings:
             print(f"  - {w}")
     if not failures and not warnings:
-        print("All good. Try: python run.py tailor --jd-file posting.txt --company Acme "
-              "--role 'Product Manager Intern'")
+        # The next command, not an example role: this used to suggest tailoring for
+        # a "Product Manager Intern" to everybody, including people nine years into
+        # an engineering career.
+        print("All good.")
+        if config.TRACKER_SOURCES:
+            print("  python run.py watch        # find postings, then: run.py inbox")
+        print("  python run.py tailor --url '<a job posting URL>'")
+        print("  python run.py tailor --jd-file posting.txt   # more reliable than scraping")
     sys.exit(1 if failures else 0)
 
 
@@ -1673,15 +1980,14 @@ def main():
     p_tailor.add_argument(
         "--job-url",
         help="URL of the posting — used only for the 'Open the posting' link in the auto-mode "
-             "report; the JD itself is read from --jd-file. An upstream job watcher (not part "
-             "of this repo) passes it in.",
+             "report; the JD itself is read from --jd-file. `run.py watch` passes it in.",
     )
     p_tailor.add_argument(
         "--auto", action="store_true",
         help="unattended mode: judge the posting on the light backend, then STOP at the "
-             "approval gate — queue it and write no draft. Generation starts when you press "
-             "the Telegram button or run `run.py pending --make <id>`. An upstream job "
-             "watcher (not part of this repo) calls the tool with this flag.",
+             "approval gate — queue it and write no draft. Generation starts when you "
+             "approve, in a notification channel or with `run.py pending --make <id>`. "
+             "`run.py watch` uses this path for every posting it finds.",
     )
     p_tailor.add_argument(
         "--backend", metavar="NAME",
@@ -1767,6 +2073,28 @@ def main():
     p_pending.add_argument("--skip", metavar="ID",
                            help="pass on this pending id (same as pressing ⏭️)")
     p_pending.set_defaults(func=cmd_pending)
+
+    p_setup = sub.add_parser(
+        "setup", help="interactive first-time setup — start here")
+    p_setup.add_argument("--only", metavar="STAGE",
+                         help="redo one stage: " + ", ".join(setup_wizard.STAGES))
+    p_setup.set_defaults(func=cmd_setup)
+
+    p_watch = sub.add_parser(
+        "watch", help="poll the configured job sources and queue what is new")
+    p_watch.add_argument("--source", metavar="NAME",
+                         help="poll only this source (default: every one in user_config.yaml)")
+    p_watch.add_argument("--recheck-filtered", action="store_true",
+                         help="also reconsider postings the relevance filter dropped before "
+                              "(use after changing your profile or the filter)")
+    p_watch.set_defaults(func=cmd_watch)
+
+    p_inbox = sub.add_parser(
+        "inbox",
+        help="read the approval queue in the terminal (needs no notification channel)")
+    p_inbox.add_argument("--all", action="store_true",
+                         help="do not summarise the postings that are not being asked about")
+    p_inbox.set_defaults(func=cmd_inbox)
 
     p_digest = sub.add_parser("digest",
                               help="send the queued approval requests now, batched")

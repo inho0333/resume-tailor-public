@@ -142,10 +142,13 @@ def test_apply_plan_normalises_an_edit_instead_of_losing_it():
 # ── the prompts describe the person in profile.yaml ─────────────────────────
 
 def _profile(**overrides):
+    """The example profile with some fields replaced, in the v2 grouped shape."""
     data = yaml.safe_load(open(profile_module.EXAMPLE_PATH, encoding="utf-8"))
-    education = data.setdefault("education", {})
+    for block in ("background", "search", "market", "authorization", "voice"):
+        for key, value in overrides.pop(block, {}).items():
+            data.setdefault(block, {})[key] = value
     for key, value in overrides.pop("education", {}).items():
-        education[key] = value
+        data["background"]["education"][key] = value
     data.update(overrides)
     return profile_module.Profile(data)
 
@@ -162,9 +165,57 @@ def test_applicant_phrase_follows_the_degree():
 
 
 def test_applicant_phrase_without_an_internship_search():
-    prof = _profile(target_roles=["product manager"], target_term="")
+    prof = _profile(search={"kind": "full_time", "term": "",
+                            "target_roles": ["product manager"]})
     assert prof.targets_internship is False
     assert prof.applicant_phrase == "an MBA applicant"
+
+
+def test_search_kind_is_stated_not_guessed():
+    """v1 inferred the search kind from the substring "intern" in a target role, which made
+    "internal audit" and "international tax" internship searches."""
+    prof = _profile(search={"kind": "full_time", "term": "",
+                            "target_roles": ["internal audit", "international tax"]})
+    assert prof.targets_internship is False
+    assert prof.search_phrase == "full-time postings"
+
+
+def test_an_experienced_profile_is_not_described_as_a_student():
+    """The pile an experienced hire is compared with is other experienced hires. v1 rendered
+    everyone as a student, and `doctor` asked for a programme to clear a warning — which then
+    told the recruiter prompt the pile was made of students."""
+    prof = _profile(background={"kind": "experienced", "years_experience": 8,
+                                "education": {"program": "", "school": "", "graduation": ""}},
+                    search={"kind": "full_time", "term": ""})
+    assert "student" not in prof.degree_label
+    assert prof.degree_label == "a candidate with 8 years of experience"
+    assert prof.peer_pool_phrase == \
+        "applicants with roughly 8 years of experience in comparable roles"
+    assert "background.education.program" not in prof.missing_fields()
+
+
+def test_a_v1_profile_still_loads():
+    """The first users of this tool have the flat v1 shape on disk, and a profile is the one
+    file nobody wants to retype. Both shapes read into the same attributes."""
+    v1 = {"name": "Sam Rivera",
+          "education": {"school": "Example University", "program": "MBA",
+                        "graduation": "2027-05", "degree_is_technical": False},
+          "work_authorization": "Student visa",
+          "career_summary": "Payments product management.",
+          "employers": ["Meridian Pay"],
+          "target_term": "Summer 2027",
+          "target_roles": ["product manage", "mba intern"],
+          "style_examples": ["Shipped a thing that moved a number 11%"]}
+    prof = profile_module.Profile(v1)
+    assert prof.program == "MBA"
+    assert prof.degree_is_technical is False
+    assert prof.career_summary == "Payments product management."
+    assert prof.work_authorization == "Student visa"
+    # v1 never stated these; the old inference has to survive or an existing user's
+    # postings start being judged differently.
+    assert prof.background_kind == "enrolled_student"
+    assert prof.targets_internship is True
+    assert prof.applicant_phrase == "an MBA internship applicant"
 
 
 def test_no_prompt_hardcodes_a_degree():
@@ -195,8 +246,11 @@ def test_identity_and_preference_fields_are_separated():
     example = profile_module.load(path=profile_module.EXAMPLE_PATH)
     identity = example.unedited_identity_fields()
     prefs = example.unedited_preference_fields()
-    assert "name" in identity and "education.school" in identity
-    assert "style_examples" in prefs
+    assert "name" in identity and "background.education.school" in identity
+    # target_roles is blocking, not a warning: left at the example it applies a
+    # stranger's job search to every posting, and nothing can be tiered high.
+    assert "search.target_roles" in identity
+    assert "voice.style_examples" in prefs
     assert not set(identity) & set(prefs)
 
 

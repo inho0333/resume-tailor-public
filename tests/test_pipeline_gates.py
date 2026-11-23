@@ -15,6 +15,7 @@ import os
 import tempfile
 
 import pytest
+import yaml
 
 import config
 import confirm_state as cs
@@ -22,6 +23,7 @@ import decisions
 import digest
 import fit_gate
 import genlock
+import conftest
 import jd_extractor
 import notify
 import profile as profile_module
@@ -415,14 +417,103 @@ def test_sponsoring_employers_and_form_questions_are_not_flagged():
         assert jd_extractor.detect_sponsorship_exclusion(text)["excluded"] is False, text
 
 
+_EXCLUSION = {"degree_eligible": "yes", "visa_caution": False,
+              "sponsorship_excluded": True,
+              "sponsorship_quote": "...without the need for current or future "
+                                   "company sponsorship."}
+
+
+def _report_body(eligibility, needs_sponsorship_later):
+    """One report, rendered for someone who does or does not need sponsorship."""
+    data = yaml.safe_load(open(conftest.PROFILE_PATH, encoding="utf-8"))
+    data.setdefault("authorization", {})
+    data["authorization"]["statement"] = data.get("work_authorization") or "Student visa"
+    data["authorization"]["sponsorship_needed_later"] = needs_sponsorship_later
+    data.pop("sponsorship_needed_later", None)
+    previous = profile_module._cached
+    profile_module._cached = profile_module.Profile(data)
+    try:
+        report = notify.Report("Globex", "Product Manager")
+        report.set_eligibility(eligibility)
+        return "\n".join(text for _priority, text in report._blocks())
+    finally:
+        profile_module._cached = previous
+
+
 def test_report_shows_sponsorship_exclusion_above_work_authorisation():
     """The sponsorship exclusion is the harder blocker, so it replaces the reassuring
     work-authorisation line rather than sitting next to it."""
-    report = notify.Report("Globex", "MBA Intern")
-    report.set_eligibility({"degree_eligible": "yes", "visa_caution": False,
-                            "sponsorship_excluded": True,
-                            "sponsorship_quote": "...without the need for current or future "
-                                                 "company sponsorship."})
-    body = "\n".join(text for _priority, text in report._blocks())
+    body = _report_body(_EXCLUSION, needs_sponsorship_later=True)
     assert "excludes candidates who will need sponsorship" in body
     assert "nothing in the posting rules you out" not in body
+
+
+def test_an_irrelevant_sponsorship_exclusion_is_not_a_warning():
+    """"We do not sponsor" is in a large share of postings, and for someone who has
+    said they need no sponsorship it warns about nothing.
+
+    `sponsorship_needed_later` was documented as the gate for exactly this — a
+    comment in jd_extractor.py says "the report consults
+    profile.sponsorship_needed_later" — and nothing consulted it, so a citizen
+    got a ⚠️ on every such posting.
+    """
+    body = _report_body(_EXCLUSION, needs_sponsorship_later=False)
+    assert "excludes candidates who will need sponsorship" not in body
+    # Nothing else was against them, so the eligibility line reads clean — which
+    # for a citizen is the accurate summary of that posting.
+    assert "no work-authorisation flags" in body
+
+
+# ── a model that says nothing must not lose the posting ─────────────────────
+
+class _MuteBackend:
+    """A backend that fails the way a local reasoning model fails.
+
+    It does not raise a parse error — it raises from the call itself, because it
+    spent its whole generation budget on thinking and returned an empty answer.
+    """
+
+    name = "mute"
+
+    def complete(self, _prompt):
+        raise RuntimeError("produced 9297 characters of thinking and an empty answer: "
+                           "it ran out of generation budget")
+
+
+class _GibberishBackend:
+    name = "gibberish"
+
+    def complete(self, _prompt):
+        return "Sure! Here is the JSON you asked for: (I could not produce it)"
+
+
+@pytest.mark.parametrize("backend", [_MuteBackend(), _GibberishBackend()])
+def test_a_posting_survives_a_model_that_answers_nothing(backend):
+    """Malformed JSON degraded to the posting's own facts; a reply that never
+    arrived still aborted the posting. Both are "the model told us nothing", and
+    the second is the common one on a local model."""
+    facts = {"location": "San Francisco, CA, US", "employment_type": "full_time",
+             "years_required": 8.0}
+    jd_profile = jd_extractor.extract_jd_profile(backend, "a posting", facts=facts)
+    # the shape every caller relies on is intact
+    assert jd_profile["must_have_skills"] == []
+    assert jd_profile["track"] == "General"
+    # and what the PAGE published survives, which is what the fit gate screens on
+    assert jd_profile["location"] == "San Francisco, CA, US"
+    assert jd_profile["employment_type"] == "full_time"
+    assert jd_profile["years_required"] == 8.0
+
+
+@pytest.mark.parametrize("backend", [_MuteBackend(), _GibberishBackend()])
+def test_eligibility_degrades_to_unclear_rather_than_raising(backend):
+    """"unclear" is the honest verdict for an answer nobody could read, and it is
+    the one that changes nothing downstream. The regex scans still run, and they
+    are the ones that catch the hard blockers."""
+    jd = ("We are hiring an engineer. We are unable to provide visa sponsorship "
+          "for this position. An active Secret clearance is required.")
+    result = jd_extractor.assess_eligibility(backend, jd)
+    assert result["degree_eligible"] == "unclear"
+    assert result["visa_caution"] is False
+    # the deterministic scans are unaffected by the model failing
+    assert result["sponsorship_excluded"] is True
+    assert "security clearance" in [c["kind"] for c in result["hard_credentials"]]

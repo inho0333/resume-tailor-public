@@ -301,7 +301,8 @@ def get_backend(name=None, role="light", log=None, model=None, fallback_model=No
     resolved = resolve_name(name, role=role, log=log)
     if resolved == "ollama":
         heavy = role == "heavy"
-        return OllamaBackend(options=config.OLLAMA_HEAVY_OPTIONS if heavy else None,
+        return OllamaBackend(options=(config.OLLAMA_HEAVY_OPTIONS if heavy
+                                      else config.OLLAMA_LIGHT_OPTIONS),
                              timeout=config.CLI_TIMEOUT_SECONDS if heavy else None)
     if resolved == "claude-cli":
         return ClaudeCLIBackend(model=model, fallback_model=fallback_model, tag=tag)

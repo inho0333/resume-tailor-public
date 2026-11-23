@@ -54,7 +54,7 @@ a correct rejection from a bug.
 | **no telegraphic notation** | `A x B x C`, `vs`, `~20%`, em dashes | `_SHORTHAND_PATTERNS` |
 | **plain hyphens only** | look-alike characters (non-breaking hyphen, figure dash, minus sign, no-break space) are rewritten to their ASCII equivalent before validation, and rejected if any survive | `llm_utils.normalize_typography`, `NON_ASCII_DASHES` |
 | **no borrowed nouns** | a proper noun or product name the original did not contain is rejected; acronyms are allowed | `_proper_nouns()` |
-| **protected lines** | lines starting `Skills:` or `Languages:` are never touched | `PROTECTED_PREFIXES` |
+| **protected lines** | a line starting with any of your `protected_prefixes` is never edited, swapped or shortened | `config.PROTECTED_PREFIXES` |
 | **total budget** | the sum of all bullets may exceed the original by at most 40 characters | `TOTAL_GROWTH_SLACK = 40` |
 
 The priority order is deliberate, and it came from a human review of real
@@ -198,3 +198,24 @@ They run on `tests/fixtures/`, not on your data, so they pass on a fresh clone.
 When you add a validator, add the sentence that motivated it. That is what makes
 this directory the valuable part of the repository rather than a pile of
 thresholds.
+
+## The ATS keyword list
+
+`keyword_extractor.py` counts what a posting actually repeats, rather than
+asking a model which words look important — a model picks the impressive ones
+and misses the dull, frequent ones that a string-matching screen is built on.
+
+Two things about it are worth knowing:
+
+- **Short acronyms survive.** A single token of two characters or fewer used to
+  be dropped as a blunt second line of defence behind the stopword list. On an
+  AI posting that deletes the most important keyword there is: measured on a
+  realistic one, "AI" appeared eleven times and "ML" five, and neither reached
+  the list — while "building" and "production" did. The exemption is taken from
+  the posting's own capitalisation, so it covers AI, ML, LLM, RAG, QA, UX, ETL,
+  SRE or whatever the field happens to use, without a vocabulary to maintain.
+- **Place names are dropped**, taken from your own `search.locations` plus the
+  location this posting states. A posting repeats its own city, and no screen
+  matches on it. That list used to be five hardcoded US cities, so a posting in
+  London or Tokyo leaked its city into the top keywords and one in Seattle did
+  not.

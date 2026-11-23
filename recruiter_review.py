@@ -4,13 +4,15 @@ rewrite the sentences according to that judgement.**
 ## Why this step is separate
 
 The existing rewrite (`tailor_engine.generate_section_revisions`) is the job of "reassembling
-facts from the database to fit the JD". The quality bar its prompt enforces is the style you
-fixed by hand (length, verbs, density), and **who is reading the page enters only as a single
-TRACK line.** Real screening does not work that way:
+facts from the database to fit the JD". The quality bar its prompt enforces is the applicant's
+own settled style (length, verbs, density), and **who is reading the page enters only as a
+single TRACK line.** Real screening does not work that way:
 
-  - A single MBA internship posting draws dozens to hundreds of applicants from the same
-    schools with the same backgrounds. The recruiter skims one page for 6-8 seconds and splits
-    the pile three ways (advance / hold / reject).
+  - A posting draws dozens to hundreds of applicants with comparable backgrounds — the sharper
+    the hiring funnel, the more alike they look. The recruiter skims one page for 6-8 seconds
+    and splits the pile three ways (advance / hold / reject). Who that pile is made of comes
+    from profile.yaml (`peer_pool_phrase`), because the comparison is the whole point of the
+    prompt and the wrong comparison set makes its verdict meaningless.
   - What is actually read in those six seconds is the lead verbs, the first 7-8 words, the size
     and unit of the numbers, and how recognizable the company names are. Impact hidden at the
     end of a sentence is effectively not read.
@@ -18,8 +20,8 @@ TRACK line.** Real screening does not work that way:
     (scope, dollars, users).
 
 So the pipeline gets a step that **takes the same facts and rewrites them into sentences that
-appeal to someone at that company.** It is split into two calls in exactly the order you asked
-for — (1) a critical review (what is weak and why), (2) a polish that follows that review. The
+appeal to someone at that company.** It is deliberately two calls, in this order — (1) a
+critical review (what is weak and why), (2) a polish that follows that review. The
 review is kept in the report and in
 `output/<company>/<company>_<role>_recruiter_review.json` so a human can check the basis.
 
@@ -32,8 +34,8 @@ old document had worked their way into the database itself), so the code verifie
   - The allowed set of numbers = numbers in the original sentence plus numbers appearing in the
     database `text`/`context` (why/how/impact). If any other number is created, that bullet is
     **discarded and the original kept** (removing a number is allowed).
-  - An em dash (—) in the output is rejected (your instruction; validate.py also treats it as
-    a FAIL).
+  - An em dash (—) in the output is rejected (a project-wide rule; validate.py also treats it
+    as a FAIL).
   - Over the length cap (260 chars), an id that is not in the database, or an id belonging to
     another section is rejected.
   - Label prefixes are re-applied afterwards with `tailor_engine.apply_section_labels`.
@@ -55,8 +57,8 @@ MAX_BULLET_CHARS = 260
 
 CRITIQUE_PROMPT_TEMPLATE = """\
 You are the **recruiter and hiring manager who personally owns hiring** for the "{role}"
-position at {company}. You are running the first screening pass over the pile of
-{applicant_phrase} resumes for this position.
+position at {company}. You are running the first screening pass over the resumes for this
+position. The one in front of you belongs to {applicant_phrase}.
 
 [The real conditions of this screen — you must read on these premises]
 - Dozens to hundreds of {peer_pool_phrase} apply to this same position. Many carry
@@ -81,6 +83,12 @@ matches as strings)
 {keyword_blob}
 {research_block}
 [Bullets of the resume about to be submitted] (by section, with ids)
+**This is the only part of the page you are shown, and the only part anyone can
+change here.** The name, the contact line, the education entry and the section
+headings are on the real page and are fixed; judge what is below and do not
+object to anything missing from it that lives elsewhere on a résumé. (Measured:
+"No education line anywhere on the page" came back as the top concern about a
+page whose education entry was two lines below the bullets.)
 {bullets_blob}
 
 [The full range of facts this applicant may use] (no fact outside this exists —
@@ -333,7 +341,7 @@ def polish(backend, company, role, review_data, sections, db_sections,
     # Lines whose format you fixed by hand (Skills:/Languages:) are **excluded** from polish.
     # Measured: when the recruiter noted that "the AI depth is not visible", polish rebuilt the
     # Skills line from 125 to 240 chars and even reordered the items. That line's "capability
-    # (tool)" order and composition are fixed by your instruction (the same reason, and the same
+    # (tool)" order and composition are settled in the approved résumé (the same reason, and the same
     # list, as pagefit's PROTECTED_PREFIXES).
     protected_ids = {bid for bid, text in text_by_id.items() if pagefit.is_protected(text)}
 

@@ -4,8 +4,9 @@
 #
 #     cp user_config.example.yaml user_config.yaml
 #
-# user_config.yaml is gitignored. `python run.py bootstrap --resume <your.docx>`
-# writes a first version of it; after that you edit it by hand.
+# user_config.yaml is gitignored. `python run.py setup` writes a first version of
+# it and patches only the keys it owns on a re-run, comments intact; after that
+# you edit it by hand.
 #
 # Facts about *you* (degree, graduation, work authorisation, target roles) are
 # not here — they are in profile.yaml. This file is only about files, modes and
@@ -49,8 +50,24 @@ base_resume_path: /Users/you/Documents/Your_Resume.docx
 # to spill onto page two.
 max_bullets_per_section:
   ACME CORP.: 4
-  EXAMPLE CO.: 4
+  EXAMPLE VENTURES: 3
   ADDITIONAL: 3
+
+# ── lines no edit may touch ─────────────────────────────────────────────────
+#
+# A labelled line like "Skills:" has a settled order and composition, and
+# shortening it is the easiest way for a model to win back a line. Lines
+# starting with any of these prefixes are excluded from editing, from bullet
+# swaps and from automatic shortening.
+#
+# The default is ["Skills:", "Languages:"], which was hardcoded until it became
+# a setting — so a résumé whose line reads "Technical Skills:", "SKILLS:" or
+# "Tools:" had no protection at all and was reworded freely. `run.py setup`
+# fills this in from the labelled lines it finds in your own document, and
+# `doctor` warns about any it does not cover.
+protected_prefixes:
+  - "Skills:"
+  - "Languages:"
 
 # ── which model does the work ───────────────────────────────────────────────
 #
@@ -100,10 +117,98 @@ heavy_backend: auto
 # was about to succeed.
 cli_timeout_seconds: 1200
 
+# ── where postings are found ────────────────────────────────────────────────
+#
+# `run.py watch` polls these. Leave it out entirely and postings arrive the way
+# they always did, through `run.py tailor --url` or `--jd-file`.
+#
+# Which source suits you depends on whether you are searching broadly or already
+# know the employers you care about. tracker/CHANNELS.md covers each one: what
+# it costs to set up, what it can see, and what it cannot.
+#
+# tracker:
+#   sources: [greenhouse, remotive]
+#
+#   # Companies you name, from their own board. No account, and the posting body
+#   # comes with the listing. The identifier is in their careers-page URL.
+#   greenhouse:
+#     companies:
+#       - {name: Epic Games, board_token: epicgames}     # boards.greenhouse.io/<token>
+#   lever:
+#     companies:
+#       - {name: Palantir, client_name: palantir}        # jobs.lever.co/<client_name>
+#   ashby:
+#     companies:
+#       - {name: Ramp, org: ramp}                        # jobs.ashbyhq.com/<org>
+#
+#   # The only source with an exclude list: one Apple team posts hundreds of
+#   # unrelated roles, so "business but not hardware" is the useful filter.
+#   apple:
+#     teams: [internships-STDNT-INTRN]
+#     location: united-states-USA
+#     include_keywords: [Business, Strategy, Operations]
+#     exclude_keywords: [Hardware, Software, PhD]
+#
+#   # An aggregator. Needs a free account, and its COVERAGE IS SET ON THEIR SITE:
+#   # the values here only narrow what your saved preferences already allow.
+#   trackly:
+#     limit: 50
+#     functions: [product, strategy]
+#
+#   # Remote roles, no account at all — the source that works the minute you
+#   # install this.
+#   remotive:
+#     category: Product Management
+#     limit: 50
+#
+#   # One short judgment per posting, on the light backend, before anything is
+#   # queued: is this even the same kind of work? A source's own filters are
+#   # coarse (an "operations" tag covers supply-chain scheduling and product
+#   # operations equally), and the alternative is a digest with fifty questions
+#   # in it. It fails open — every failure lets the posting through — so turning
+#   # it off only means more postings reach you, never fewer.
+#   relevance_filter: true
+#
+#   # Titles and companies you never want to see again. The one fail-closed step
+#   # in the tracker, so it starts empty and stays yours: one person's noise is
+#   # another's target. Lowercase substring match; a match is dropped silently.
+#   block_titles: []
+#   block_companies: []
+
+# ── how you are asked to approve a posting ──────────────────────────────────
+#
+# Channel names from channels/, in the order to try them. ["auto"] — the
+# default — means the local inbox plus every channel whose credentials happen to
+# be in the environment, so an existing Telegram setup keeps working with
+# nothing set here.
+#
+#   telegram — inline ✅/⏭️ buttons, answered in the chat. The only one that can
+#              answer its own messages. TG_BOT_TOKEN + TG_CHAT_ID.
+#   discord  — a webhook URL and nothing else, so it is the quickest to set up.
+#              No buttons: you answer with `run.py pending --make <id>`.
+#   email    — your own SMTP credentials. No app on the phone, no buttons.
+#   local    — the default. state/inbox.md plus `run.py inbox`. No credentials.
+#   whatsapp — interface only; see channels/whatsapp.py for why.
+#
+# No channel is required. With none configured the whole pipeline still runs and
+# the queue is read with `run.py inbox`.
+notify_channels: [auto]
+
+# Generation budget when a LOCAL model does the work, as native Ollama options.
+# A reasoning model (gpt-oss and friends) spends its budget on thinking before it
+# answers, and with too small a budget it returns an empty answer rather than an
+# error — the step is simply lost. Measured on a realistic posting with the
+# client's older default: 9,297 characters of thinking and nothing in the answer.
+#
+# Raise num_ctx further if your model supports it; lower it if the machine runs
+# out of memory (the symptom is Ollama killing the request).
+# ollama_light_options: {num_ctx: 16384, num_predict: 4096}
+# ollama_heavy_options: {num_ctx: 32768, num_predict: 8192}
+
 # ── the approval gate ───────────────────────────────────────────────────────
 #
-# Only relevant if something hands postings to this tool automatically (a job
-# watcher, cron). Running `tailor` yourself ignores all of it.
+# Only relevant when postings arrive automatically (`run.py watch`, or an
+# upstream watcher). Running `tailor` yourself ignores all of it.
 
 # Process a handed-over posting end to end without a human. False means you get
 # a notification and run `tailor` yourself.

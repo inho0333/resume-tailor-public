@@ -3,10 +3,36 @@ resume .docx automatically.
 
 This is the opposite direction from resume_writer.find_section_block — instead of locating a
 block by a header_text it already knows, it guesses the header/bullet boundaries from
-scratch (bootstrap command only). It is a heuristic that assumes a standard one-page resume
-layout (company + location line -> [description line] -> [title + dates line] -> bullets,
-ending in a flat section such as "ADDITIONAL"), so it may not be perfect — bootstrap shows
-the result to a human for confirmation.
+scratch (`setup` / `bootstrap` only). It is a heuristic that assumes a standard one-page
+resume layout (company + location line -> [description line] -> [title + dates line] ->
+bullets, with flat sections such as "ADDITIONAL" among them), so it may not be perfect —
+setup shows the result to a human for confirmation.
+
+## Where a block ends
+
+A block ends at the next bulleted run, or at the next **section heading**. The second half of
+that sentence is not cosmetic. The scan runs from the experience heading to the end of the
+document, and without it a block's header lines run straight through any later heading:
+
+    WORK EXPERIENCE          <- the scan starts here
+      NORTHWIND DATA, ...
+        • bullet
+      HELIOS ROBOTICS, ...
+        • bullet
+    EDUCATION                <- became an "employer"...
+      Carnegie Institute ...
+      MS Computer Science
+    ADDITIONAL               <- ...which swallowed this heading as one of its own lines,
+        • Open Source: ...      and then claimed these bullets as EDUCATION's
+
+Measured on four ordinary résumés, all four hit it, because every one of them puts education
+*after* experience — which is how most experienced-hire résumés are laid out, and the
+opposite of the shipped template. The result was a database whose ADDITIONAL bullets were
+filed under a section called EDUCATION, and a renderer that would then write them there.
+
+A heading is recognised by the document's own formatting rather than by a list of words: the
+paragraph that matched `start_after` IS a section heading, so its bold/size/style signature is
+what the others are compared against. Nothing here needs to know that "EDUCATION" is a word.
 """
 
 from docx.oxml.ns import qn
@@ -35,6 +61,24 @@ def is_bullet(paragraph):
         return False
 
 
+def format_signature(paragraph):
+    """(bold, size in points, style name) of a paragraph's first non-empty run.
+
+    How a section heading is told apart from a body line, using the document's own
+    formatting instead of a vocabulary. None when the paragraph has no text runs.
+    """
+    runs = [r for r in paragraph.runs if r.text.strip()]
+    if not runs:
+        return None
+    run = runs[0]
+    size = run.font.size
+    try:
+        style = paragraph.style.name or ""
+    except (AttributeError, KeyError):
+        style = ""
+    return (bool(run.bold), size.pt if size is not None else None, style)
+
+
 def find_heading_index(paragraphs, heading_text):
     """Index of the first paragraph matching heading_text (case-insensitive). None if absent."""
     needle = heading_text.strip().lower()
@@ -52,9 +96,13 @@ def parse_experience_blocks(doc, start_after="EXPERIENCE"):
     header_text = the first non-bullet line of each block (exactly the string
     resume_writer.find_section_block matches on) — the company/location line, or, for a flat
     section such as "ADDITIONAL", the section title itself.
+
+    A block with no bullets is dropped, which is what keeps an EDUCATION section out of the
+    experience database: it has header lines and no bullets of its own.
     """
     paragraphs = doc.paragraphs
     lo = 0
+    heading_sig = None
     if start_after:
         idx = find_heading_index(paragraphs, start_after)
         if idx is None:
@@ -66,6 +114,7 @@ def parse_experience_blocks(doc, start_after="EXPERIENCE"):
                 f"templates/resume_template.docx is a document in that shape."
             )
         lo = idx + 1
+        heading_sig = format_signature(paragraphs[idx])
     hi = len(paragraphs)
 
     blocks = []
@@ -80,6 +129,11 @@ def parse_experience_blocks(doc, start_after="EXPERIENCE"):
         context_lines = [text]
         j = i + 1
         while j < hi and paragraphs[j].text.strip() and not is_bullet(paragraphs[j]):
+            # A later section heading ends this block rather than joining it. See
+            # the module docstring: without this, a heading and everything under it
+            # are absorbed into whatever block came before.
+            if heading_sig and format_signature(paragraphs[j]) == heading_sig:
+                break
             context_lines.append(paragraphs[j].text.strip())
             j += 1
 

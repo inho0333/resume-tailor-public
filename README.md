@@ -1,28 +1,47 @@
 # resume-tailor
 
-Tailors your one-page résumé to a specific job posting, and refuses to do it
-badly. Give it a posting; it decides whether the posting is worth your time,
-edits the wording of the résumé you already approved, swaps one or two bullets
-for better-matching experience, and keeps the result to one real page — measured
-in Word, not estimated.
+Finds job postings, screens them against what you actually want, and tailors
+your one-page résumé to the ones worth applying to — by editing the résumé you
+already approved, not by writing a new one.
+
+Four stages, and each is useful on its own:
+
+```
+  Tracker            Database          JD analysis         Retailor
+  ─────────          ────────          ───────────         ────────
+  watch the     →    everything   →    what does      →    edit YOUR approved
+  places                you              this posting         résumé: swap words,
+  postings              could ever       ask for, and         replace one or two
+  appear                say about        does it fit          bullets, keep it to
+                        yourself         what you want?       one real page
+```
 
 It will not invent a number, rewrite your sentences into recruiter-speak, or
 submit anything anywhere. When an edit cannot pass the checks, the original
 sentence stays.
 
-> **New here? Go to [SETUP.md](SETUP.md).** Half an hour to a first draft, and
-> `python run.py doctor` tells you what is still missing at any point.
+> **New here:**
+>
+> ```bash
+> python run.py setup
+> ```
+>
+> Six stages, every question skippable, and it only asks what your previous
+> answers make relevant. [SETUP.md](SETUP.md) explains what it wrote and how to
+> change any of it; `python run.py doctor` says what is still missing at any
+> point.
 
 ## What you need, cost first
 
 | | |
 |---|---|
 | **An LLM backend** | One of: the Claude Code CLI on a subscription, an Anthropic API key (metered), a local model via [Ollama](https://ollama.com) (free), or any agent CLI such as OpenAI Codex. See [Backends](#backends) — **you do not need all of them, and you do not need Ollama.** |
-| **macOS + Microsoft Word** | Only for the page-count guarantee. Word is driven by AppleScript to measure the real page count. Without it you still get drafts; the page count becomes an estimate that can be wrong at the boundary. LibreOffice is not a substitute (no Calibri, so even a correct one-page file renders as two). |
 | **Python 3.10+** | 3.14 is what it is developed against. |
-| **Your résumé, as a one-page .docx** | Everything is rendered from this file: its fonts, margins and bullet formatting are the output's. |
-| **An evening** | About 20 minutes of installing and pointing at files, then an hour or two writing down your own experience in `resume_db.yaml` — that part is what determines output quality, and you keep adding to it. |
-| *Optional:* a Telegram bot | Only to approve or skip postings from your phone. The CLI works without it. |
+| **Your résumé, as a one-page .docx** | Everything is rendered from this file: its fonts, margins and bullet formatting are the output's. No such file yet? `templates/resume_template.docx` is one in the right shape, and setup offers it. |
+| **An evening** | About 20 minutes of installing and answering setup, then an hour or two writing down your own experience in `resume_db.yaml` — that part is what determines output quality, and you keep adding to it. |
+| *Optional:* macOS + Microsoft Word | Only for the page-count **guarantee**: Word is driven by AppleScript to measure the real page count. Without it you still get drafts and the page count becomes an estimate against your own template, which is usually right and can be wrong at the boundary. LibreOffice is not a substitute (no Calibri, so even a correct one-page file renders as two). |
+| *Optional:* a job source | Trackly, a company's own Greenhouse/Lever/Ashby board, or Remotive — which needs no account at all. Without one, you hand it postings yourself. [tracker/CHANNELS.md](tracker/CHANNELS.md). |
+| *Optional:* a notification channel | Telegram (the only one with ✅/⏭️ buttons), Discord, email — or nothing, in which case requests land in `state/inbox.md` and `run.py inbox` reads them. |
 
 Nothing is sent anywhere except to the LLM backend you choose. With Ollama,
 nothing leaves the machine at all. See [Privacy](#privacy).
@@ -31,13 +50,15 @@ nothing leaves the machine at all. See [Privacy](#privacy).
 
 **Does**
 
+- watches the places postings appear, and queues only the ones worth asking you about
 - reads a posting from a URL or a text file, and extracts what it actually asks for
 - tells you whether the posting's stated requirements admit you at all, quoting the posting
 - judges fit *before* generating anything, so you are not handed twelve drafts you did not want
+- screens on your own hard requirements — employment type, place, level, years, pay — in code, and names each mismatch instead of folding it into a score
 - edits your approved résumé: wording to match the posting's vocabulary, one or two bullets swapped for closer experience
 - enforces one page by measuring it, and by reverting edits rather than compressing sentences
 - scores the draft the way a recruiter reading for eight seconds would, and reports the objections
-- writes a cover letter draft from the same material
+- typesets a cover letter you wrote, in the same format as the résumé (`cover_letter.py` — the prose is yours; this is not a generator)
 
 **Does not**
 
@@ -54,22 +75,29 @@ git clone https://github.com/inho0333/resume-tailor-public.git resume-tailor
 cd resume-tailor
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-cp profile.example.yaml profile.yaml   # who you are
-.venv/bin/python run.py doctor         # what is still missing
+.venv/bin/python run.py setup
 ```
 
-Then follow [SETUP.md](SETUP.md), which walks through `profile.yaml` and has
-`bootstrap` generate `user_config.yaml`, `resume_db.yaml` and `base_resume.yaml`
-from your .docx.
+Setup reads your .docx and writes the four files that describe you, asks what
+you are looking for, checks any job source you pick against its real API, and
+finishes by running `doctor`. Everything it asks can be skipped; everything it
+writes can be edited by hand afterwards. Re-run one part with
+`run.py setup --only <stage>`.
 
-No résumé in the shape this expects? `templates/resume_template.docx` is one —
-a one-page layout with the `EXPERIENCE` heading, `Company, City` header lines
-and bulleted achievements the renderer needs. Point `bootstrap` at it to watch
-the whole pipeline run before your own career data is involved.
+No résumé in the shape this expects? Setup offers
+`templates/resume_template.docx` — a one-page layout with the `EXPERIENCE`
+heading, `Company, City` header lines and the bulleted achievements the renderer
+needs. Accept it to watch the whole pipeline run before your own career data is
+involved.
 
 Once set up:
 
 ```bash
+# let it find postings, then read the queue and build one
+.venv/bin/python run.py watch
+.venv/bin/python run.py inbox
+.venv/bin/python run.py pending --make <id>
+
 # tailor for one posting
 .venv/bin/python run.py tailor --url "https://..." --company "Acme" --role "Product Manager Intern"
 
@@ -79,10 +107,6 @@ Once set up:
 # score an existing draft like a recruiter would
 .venv/bin/python run.py review --company "Acme" --role "Product Manager Intern"
 
-# postings queued by --auto, and building one without Telegram
-.venv/bin/python run.py pending
-.venv/bin/python run.py pending --make <id>
-
 # check the setup, and optionally send one real prompt through each backend
 .venv/bin/python run.py doctor --probe
 ```
@@ -91,27 +115,47 @@ Output lands in `output/<Company>/`.
 
 ## How it works
 
-Twelve steps. **(code)** means deterministic Python — no model involved, and
-therefore not subject to a model's mood. **(light)** and **(heavy)** are the two
-LLM roles; see [Backends](#backends).
+**(code)** means deterministic Python — no model involved, and therefore not
+subject to a model's mood. **(light)** and **(heavy)** are the two LLM roles;
+see [Backends](#backends).
+
+### Stage 1 — Tracker: finding the postings
+
+Optional, and separate from everything below: skip it and hand postings over
+yourself. `run.py watch` polls the sources you chose and queues what survives.
 
 | | step | |
 |---|---|---|
-| 1 | fetch the posting text from a URL, with a readability extractor and a plain-HTML fallback | code |
-| 2 | find sponsorship-exclusion language by regex, because models read straight past it | code |
-| 3 | judge whether the posting's degree requirements admit you, quoting the posting | light |
-| 4 | extract what the posting wants: must-haves, responsibilities, the company's own vocabulary | light |
-| 5 | count repeated terms for ATS keyword matching | code |
-| 6 | judge fit — how much of this posting your experience can actually evidence — and clamp the verdict with your own `target_roles` and your real past decisions | light |
-| 7 | *(optional)* ask you to approve or skip, batched into a digest | code |
-| 8 | research the company for red flags and for the words it uses about itself | heavy |
-| 9 | plan the edit: which wording to swap, which one or two bullets to replace | heavy |
-| 10 | apply the plan through the validators — **this is where most proposed edits die** | code |
-| 11 | score the result as a recruiter, and report the objections | heavy |
-| 12 | measure the page count in Word; if it spilled, revert edits (then swaps) until it fits | code |
+| 1 | poll each source — an aggregator, a company's own Greenhouse/Lever/Ashby board, Apple's careers search, a public remote index | code |
+| 2 | drop what has been seen before: by the source's own id, and by company + title across sources, because the same opening found twice has two unrelated ids | code |
+| 3 | fill in a missing posting body from its URL, cheapest route first: the employer's ATS API, then the page's schema.org block, then its visible text | code |
+| 4 | one short judgment — is this even the same kind of work? — against your profile, your experience and what you have approved before. Fails open: every error lets the posting through | light |
 
-Steps 1–7 are cheap: a local model does them for nothing. Steps 8–11 are where
-model quality shows up in what you send.
+The first poll of a new source marks everything it can see as already seen and
+sends nothing. Without that, turning on a source means one notification per
+posting in its whole index — measured at around fifty.
+
+### Stages 2–4 — Database, JD analysis, Retailor
+
+| | step | |
+|---|---|---|
+| 1 | fetch the posting: its schema.org `JobPosting` block first (clean text plus the facts it states outright), then a readability extractor, then plain HTML | code |
+| 2 | find sponsorship-exclusion language, and licence/clearance requirements, by regex — models read straight past both | code |
+| 3 | judge whether the posting's degree requirements admit you, quoting the posting | light |
+| 4 | extract what the posting wants: must-haves, responsibilities, the company's own vocabulary, **and** its location, employment type, level, years required and pay | light |
+| 5 | count repeated terms for ATS keyword matching | code |
+| 6 | check your own hard requirements against those facts — type, place, arrangement, years, level, pay. Arithmetic, not judgment, and each mismatch is named | code |
+| 7 | judge fit — how much of this posting your experience can actually evidence — then clamp with your own target roles, your real past decisions, and the mismatches from step 6 | light |
+| 8 | *(optional)* ask you to approve or skip, batched into a digest | code |
+| 9 | research the company for red flags and for the words it uses about itself | heavy |
+| 10 | plan the edit: which wording to swap, which one or two bullets to replace | heavy |
+| 11 | apply the plan through the validators — **this is where most proposed edits die** | code |
+| 12 | score the result as a recruiter, and report the objections | heavy |
+| 13 | measure the page count in Word; if it spilled, revert edits (then swaps) until it fits | code |
+
+Steps 1–8 are cheap: a local model does them for nothing, and **nothing past
+step 8 runs until you approve**. Steps 9–12 are where model quality shows up in
+what you send.
 
 ## The quality gates
 
@@ -145,7 +189,7 @@ What the validators enforce, on every proposed edit:
 - **a swap must bring in a different bullet** — swapping a bullet for itself would let a base sentence be rewritten under the looser swap rules, which is how one lost its *why* and *how* clauses and still passed every gate
 - **plain hyphens only** — a non-breaking hyphen looks right in Word and breaks in a plain-text ATS field, so look-alike characters are normalised away before validation and rejected if they survive it
 - **retired experience never returns** — a bullet marked `retired: true` cannot reach the résumé through any path, and a test holds that shut
-- **protected lines** — the Skills and Languages lines are never reordered or reworded
+- **protected lines** — a labelled line like `Skills:` is never reordered or reworded. Which labels those are comes from your own document (`protected_prefixes`), because the list was hardcoded to exactly two and a résumé reading `Technical Skills:` had no protection at all
 - **one page, measured** — spillover is fixed by reverting edits, not by compressing sentences. Since your original fits on one page, reverting always converges.
 - **widow removal is deletion-only** — when a bullet's last line holds two words, the model may only delete words; the result is checked against the original word order, and rejected if any number disappears
 
@@ -184,10 +228,14 @@ twin whose comments are the real documentation.
 
 | file | what it holds | how you make it |
 |---|---|---|
-| `profile.yaml` | degree, graduation, work authorisation, target roles, and two or three of your own bullets as a style reference | copy `profile.example.yaml` |
-| `user_config.yaml` | paths, mode, per-section bullet caps, backend choice | `run.py bootstrap`, then edit |
-| `resume_db.yaml` | **every** bullet you could ever use, with the context and the allowed numbers behind each one | `run.py bootstrap --resume your.docx`, then hours of your own writing |
-| `base_resume.yaml` | which bullets your approved résumé actually shows, keyed to the headings in the .docx | `run.py bootstrap` writes it from your document; you review it once |
+| `profile.yaml` | who you are (background, education, work authorisation) and **what you are looking for** — type of role, target and avoided roles, level, places, arrangement, pay floor, dealbreakers — plus two or three of your own bullets as a style reference | `run.py setup` |
+| `user_config.yaml` | paths, mode, per-section bullet caps, backend choice, job sources, notification channels | `run.py setup`, then edit |
+| `resume_db.yaml` | **every** bullet you could ever use, with the context and the allowed numbers behind each one | `run.py setup` reads your .docx, then hours of your own writing |
+| `base_resume.yaml` | which bullets your approved résumé actually shows, keyed to the headings in the .docx | `run.py setup` writes it from your document; you review it once |
+
+Every axis in `profile.yaml`'s `search` block is optional, and **empty has a
+precise meaning: that axis is not screened at all.** It is never a hidden
+filter. See [docs/preferences.md](docs/preferences.md).
 
 A fifth file is committed, and is not about you: `templates/resume_template.docx`,
 a standard one-page layout in the shape the parser and the renderer expect. Start
@@ -229,6 +277,9 @@ once, held in place so the same kind of edit can never pass again.
 - [docs/architecture.md](docs/architecture.md) — modules, data flow, where to change what
 - [docs/quality-gates.md](docs/quality-gates.md) — every validator, what it rejects, why it exists
 - [docs/operations.md](docs/operations.md) — running it unattended, the Telegram approval loop, troubleshooting
+- [docs/tracker.md](docs/tracker.md) — the source interface, and how to add one
+- [tracker/CHANNELS.md](tracker/CHANNELS.md) — every job source: coverage, setup cost, limits
+- [docs/preferences.md](docs/preferences.md) — every screening axis and what skipping it means
 - [docs/cover-letter.md](docs/cover-letter.md) — the cover-letter formula
 
 ## Status
@@ -244,6 +295,10 @@ Built for one person's job search, then generalised. Expect rough edges:
 - every `header_text` in `base_resume.yaml` must match its .docx paragraph
   character for character. Bootstrap gets this right; a document edited
   afterwards can drift, which is what `doctor` checks.
-- The unattended approval loop (Telegram + launchd) is the least portable part.
+- The unattended loop (`watch` under launchd or cron, plus a notification
+  channel) is the least portable part. `run.py inbox` is the version that needs
+  nothing.
+- `tracker/sources/linkedin.py` is deliberately an interface with no
+  implementation; the file says why, and what to use instead.
 
 MIT licensed. Issues and patches welcome.

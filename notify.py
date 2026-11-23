@@ -1,9 +1,13 @@
-"""Telegram notifications — thin layer over vendor/telegram.py.
+"""Notifications: one message per posting, delivered wherever you chose.
 
-vendor/telegram.py has the four levels (silent/info/alert/critical) and plain
-sendMessage. This module adds document upload (sendDocument) and the per-posting
-Report object. With TG_BOT_TOKEN/TG_CHAT_ID unset every send is skipped and the
-same text goes to the console, so nothing here is required to run the tool.
+This module composes the message. `channels/` delivers it. Messages are written
+once, in Telegram-flavoured HTML, and each channel converts what it has to —
+composing a variant per channel would mean making every future change to a
+report four times.
+
+No channel is required. With nothing configured the local inbox takes the
+message (`state/inbox.md`) and the same text goes to the console, so the whole
+pipeline runs on a machine with no credentials at all.
 
 ## One notification per posting
 
@@ -15,37 +19,72 @@ research message from the gap message. On a phone, fragments about the same post
 drift apart and lose their context.
 
 Now `Report` collects each stage's result and sends **once at the end**, in
-`Report.send()` — one docx attachment whose caption carries the whole summary. Only
-the "new posting found" alert still has to be immediate, and an upstream job watcher
-(not part of this repo) sends that one line first: the drafting pipeline takes a
-measured 2-5 minutes, too long to hold the first alert back.
+`Report.send()` — one attachment whose caption carries the whole summary.
 
 If the pipeline breaks partway through, **whatever was collected still goes out** —
 run.py's except block fills in only `error` on the same Report and sends it. Nothing
 here waits for every stage to succeed.
 """
 
-import json
 import os
+from datetime import datetime
 
-import requests
+import channels
 
-from vendor import telegram
-
-# The four levels (silent/info/alert/critical) live in vendor/telegram.py. With no
-# token they all fall back to console output and the pipeline keeps running.
-silent = telegram.silent
-info = telegram.info
-alert = telegram.alert
-critical = telegram.critical
-
-_API_BASE = telegram.API_BASE
-_CHAT_ID = telegram.CHAT_ID
-
-# Telegram's sendDocument caption limit. Going over returns a 400 and **the document
-# itself never arrives**, so when the text overflows we drop the lowest-priority
-# blocks first (see _render). Budgeted 24 characters short of the real limit.
+# The caption limit of the narrowest channel that carries one (Telegram's
+# sendDocument). Going over returns a 400 and **the document itself never
+# arrives**, so when the text overflows we drop the lowest-priority blocks first
+# (see _render). Budgeted 24 characters short of the real limit.
 CAPTION_LIMIT = 1000
+
+
+def _channels():
+    try:
+        import config as _cfg
+
+        names = _cfg.NOTIFY_CHANNELS
+    except Exception:
+        names = None
+    return channels.enabled(names)
+
+
+def _stamp():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+# ── the four levels ──────────────────────────────────────────────────────────
+#
+# silent is console-only: routine progress, which on a phone is noise. The other
+# three go to every configured channel, and to the console either way.
+
+def silent(msg):
+    print(f"[{_stamp()}] {msg}", flush=True)
+
+
+def info(msg, buttons=None):
+    print(f"[{_stamp()}] {msg}", flush=True)
+    _broadcast(msg, buttons)
+
+
+def alert(msg, buttons=None):
+    print(f"[{_stamp()}] ! {msg}", flush=True)
+    _broadcast(f"!! {msg}", buttons)
+
+
+def critical(msg, buttons=None):
+    print(f"[{_stamp()}] !! {msg}", flush=True)
+    _broadcast(f"!!!! {msg}", buttons)
+
+
+def _broadcast(text, buttons=None):
+    """info/alert/critical take a flat button list; send_message takes rows."""
+    keyboard = [list(buttons)] if buttons else None
+    for channel in _channels():
+        if channel.name == "local":
+            # The console print above already carried it; writing routine alerts
+            # into the inbox file would bury the approval requests it is for.
+            continue
+        channel.send_message(text, keyboard=keyboard)
 
 # A recruiter score below this gets a ⚠️ in the report. Read from config to avoid a
 # second definition, with a default for callers that import this module without config.
@@ -64,61 +103,45 @@ _VERDICT_LABEL = {
 
 
 def send_message(text, keyboard=None):
-    """Send one text message. `keyboard` is an inline_keyboard laid out **row by row**
-    ([[(label, callback), ...], ...]) — `info(buttons=...)` in vendor/telegram.py wraps
-    buttons three to a row, which splits a posting's ✅/⏭️ pair across rows and leaves
-    you unable to tell which posting a button belongs to (a digest message carries up
-    to 10 postings x 2 buttons).
+    """Send one message to every configured channel. True if any delivered it.
 
-    `send` in vendor/telegram.py swallows every failure and times out after 5 seconds.
-    For a digest, "did this message actually arrive" is the whole day's output, so this
-    function reports whether it did.
-    Returns: whether the send succeeded."""
-    if not telegram.is_configured():
-        silent(f"[telegram not configured] message not sent:\n{text}")
-        return False
-    payload = {"chat_id": _CHAT_ID, "text": text, "parse_mode": "HTML",
-               "disable_web_page_preview": True}
-    if keyboard:
-        payload["reply_markup"] = json.dumps({
-            "inline_keyboard": [[{"text": label, "callback_data": cb} for label, cb in row]
-                                for row in keyboard]
-        })
-    try:
-        resp = requests.post(f"{_API_BASE}/sendMessage", json=payload, timeout=20)
-        resp.raise_for_status()
-        return True
-    except requests.RequestException as e:
-        # Log the response body too — on a 400 (HTML parsing, caption length) the log is
-        # the only way to track down which character caused it.
-        detail = getattr(getattr(e, "response", None), "text", "")[:300]
-        silent(f"[telegram send failed] {e} {detail}\n{text[:500]}")
-        return False
+    `keyboard` is an inline keyboard laid out **row by row**
+    ([[(label, callback), ...], ...]): a digest carries up to ten postings and
+    two buttons each, and a pair split across rows leaves you unable to tell
+    which posting a button belongs to. A channel that cannot render buttons
+    appends the CLI command that answers the request instead
+    (channels.base.Channel.send_message).
+
+    Whether the message actually arrived is the whole day's output for a digest,
+    so this reports it rather than swallowing the result.
+    """
+    delivered = False
+    for channel in _channels():
+        if channel.send_message(text, keyboard=keyboard):
+            delivered = True
+        else:
+            silent(f"[{channel.name}] not delivered")
+    return delivered
 
 
 def send_document(path, caption=""):
-    """Send the docx draft over Telegram — review is always done by a human, on a phone.
-    This is the closest thing in the system to "submitting an application", but all it
-    really does is send a file to you (no submission API is ever called)."""
-    if not telegram.is_configured():
-        silent(f"[telegram not configured] document not sent: {path}")
-        return False
+    """Deliver the .docx draft — review is always done by a human, often on a phone.
+    This is the closest thing in the system to "submitting an application", and all it
+    does is hand the file to you (no submission API is ever called).
+
+    Returns the names of the channels that delivered it. The caller needs the
+    names, not just a boolean: a channel that writes to the console or to the
+    local inbox has already shown the caption, and echoing it again is a second
+    copy of the whole report.
+    """
     if not os.path.exists(path):
         alert(f"document upload failed — no such file: {path}")
-        return False
-    try:
-        with open(path, "rb") as f:
-            resp = requests.post(
-                f"{_API_BASE}/sendDocument",
-                data={"chat_id": _CHAT_ID, "caption": caption, "parse_mode": "HTML"},
-                files={"document": f},
-                timeout=30,
-            )
-        resp.raise_for_status()
-        return True
-    except requests.RequestException as e:
-        alert(f"document upload failed: {e}")
-        return False
+        return []
+    delivered = []
+    for channel in _channels():
+        if channel.send_document(path, caption=caption):
+            delivered.append(channel.name)
+    return delivered
 
 
 # ── One report per posting ────────────────────────────────────────────────────
@@ -174,8 +197,24 @@ class Report:
         }
         if eligibility.get("visa_caution"):
             self.visa = {"note": (eligibility.get("visa_note") or "").strip()}
-        if eligibility.get("sponsorship_excluded"):
+        if eligibility.get("sponsorship_excluded") and self._sponsorship_matters():
             self.sponsorship = {"quote": (eligibility.get("sponsorship_quote") or "").strip()}
+
+    @staticmethod
+    def _sponsorship_matters():
+        """Whether to spend a report block on "we do not sponsor".
+
+        See Profile.sponsorship_exclusion_matters: that sentence is in a large
+        share of postings, and for someone who has said they need no sponsorship
+        it is not a warning about anything.
+        """
+        try:
+            import profile as profile_module
+
+            return profile_module.get().sponsorship_exclusion_matters
+        except Exception:
+            # No profile, no opinion — show it, which is the cautious direction.
+            return True
 
     def set_research(self, research):
         if research and research.get("notable") and research.get("notes"):
@@ -359,11 +398,17 @@ class Report:
         text message. Either way, exactly one message."""
         text = self.render()
         if self.docx_path and os.path.exists(self.docx_path):
-            if send_document(self.docx_path, caption=text):
-                # Mirror what was sent to the console (= logs/poll.log). The caption goes
-                # out through sendDocument, bypassing silent/info, so without this the log
-                # would not record what actually reached the phone.
-                silent(f"[report sent]\n{text}")
+            delivered = send_document(self.docx_path, caption=text)
+            if delivered:
+                # Mirror what was sent to the console (= the run log), but only when
+                # no channel has already written it there. A remote channel's
+                # caption goes out through its own API and bypasses this module's
+                # console output, so without the mirror the log would not record
+                # what reached the phone — while the local inbox channel prints the
+                # report itself, and echoing it again gives the same report twice,
+                # the second time as raw markup.
+                if not {"local"} & set(delivered):
+                    silent(f"[report sent via {', '.join(delivered)}]\n{text}")
                 return
             # A failed document upload must not take the analysis down with it.
             info(text + f"\n\n(document upload failed — local file: {_esc(self.docx_path)})")

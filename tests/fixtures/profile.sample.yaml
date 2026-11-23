@@ -5,6 +5,14 @@
 # and installs it as the process-wide profile instead, so the suite runs with no
 # private data present.
 #
+# IT IS DELIBERATELY IN THE v1 (FLAT) SHAPE. profile.example.yaml groups the same
+# fields under background / search / market / authorization / voice, and profile.py
+# reads either — so running the whole suite against this file is the continuous
+# proof that an existing profile.yaml, which nobody wants to retype, keeps working
+# and keeps producing the same prompt fragments. Convert it to v2 and that proof
+# quietly disappears; tests/test_review_fixes_2026_11_04.py builds v2 profiles for
+# the cases that need them.
+#
 # See profile.example.yaml for what each field is for. Three of these values are
 # load-bearing for the tests and must not be changed casually:
 #

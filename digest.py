@@ -56,6 +56,53 @@ def _sort_key(item):
 TEXT_LIMIT = 3900  # 196 characters of slack (emoji and link lengths vary)
 
 
+def _sponsorship_matters():
+    """Whether "we do not sponsor" is worth a line in a digest.
+
+    The digest is tight on space and its whole purpose is removing noise. That
+    sentence appears in a large share of postings, and for someone whose profile
+    says they need no sponsorship it is not news.
+    """
+    try:
+        import profile as profile_module
+
+        return profile_module.get().sponsorship_exclusion_matters
+    except Exception:
+        return True
+
+
+def _facts_line(record):
+    """Location · arrangement · level · pay, when the posting states them.
+
+    The digest used to carry fit, eligibility and work authorisation and nothing
+    else — not even where the job was. "People decide by what the job is" was
+    already the finding that put a fit judgment in this message; where it is and
+    what it pays are part of what the job is, and both were a click away on the
+    posting instead of being in front of you.
+    """
+    jd = record.get("jd_profile") or {}
+    bits = []
+    if jd.get("location"):
+        bits.append(notify.clip(jd["location"], 34))
+    if jd.get("work_arrangement"):
+        bits.append(jd["work_arrangement"])
+    if jd.get("seniority_level"):
+        bits.append(jd["seniority_level"])
+    comp = jd.get("comp_range")
+    if comp and comp.get("min"):
+        currency = f"{comp['currency']} " if comp.get("currency") else ""
+        period = comp.get("period") or "year"
+        if comp.get("max") and comp["max"] != comp["min"]:
+            bits.append(f"{currency}{comp['min']:,.0f}-{comp['max']:,.0f}/{period}")
+        else:
+            bits.append(f"{currency}{comp['min']:,.0f}/{period}")
+    elif jd.get("comp_stated"):
+        bits.append(notify.clip(jd["comp_stated"], 30))
+    if not bits:
+        return None
+    return "   " + notify.esc(" · ".join(str(b) for b in bits))
+
+
 def _item_lines(idx, record, detail):
     """The display lines for one posting. detail: "full" | "compact"."""
     prefit = record.get("prefit") or {}
@@ -73,7 +120,15 @@ def _item_lines(idx, record, detail):
     sub = [f"   {fit_gate.TIER_LABEL.get(tier, 'possible fit')}"]
     if prefit.get("reason"):
         sub[0] += f" — {notify.esc(notify.clip(prefit['reason'], 90))}"
-    if (record.get("eligibility") or {}).get("sponsorship_excluded"):
+    facts = _facts_line(record)
+    if facts:
+        sub.append(facts)
+    for violation in (prefit.get("violations") or [])[:2]:
+        if violation.get("advisory"):
+            continue
+        sub.append("   ⚠️ " + notify.esc(notify.clip(violation["message"], 90)))
+    if ((record.get("eligibility") or {}).get("sponsorship_excluded")
+            and _sponsorship_matters()):
         sub.append("   ⚠️ excludes candidates who will need sponsorship")
     if (record.get("eligibility") or {}).get("visa_caution"):
         sub.append("   ⚠️ work authorisation: citizenship or clearance required")
@@ -109,10 +164,20 @@ def _render(askable, silent_items, detail, show_silent_detail):
     return "\n\n".join(lines)
 
 
-def build(records):
+def build(records, include_sent=False):
     """Build the digest body and keyboard. Returns: (text, keyboard, asked_ids, listed_ids),
-    or (None, None, [], []) when there is nothing to send."""
-    pending = sorted(_unsent(records).items(), key=_sort_key)
+    or (None, None, [], []) when there is nothing to send.
+
+    include_sent: show everything unexpired rather than only what has not been
+    sent yet. `run.py inbox` reads the queue this way — a request already sent
+    is still waiting for an answer, and the point of that command is to show
+    what is waiting, not what is about to go out.
+    """
+    if include_sent:
+        pool = {sid: r for sid, r in records.items() if not confirm_state.is_expired(r)}
+    else:
+        pool = _unsent(records)
+    pending = sorted(pool.items(), key=_sort_key)
     if not pending:
         return None, None, [], []
 

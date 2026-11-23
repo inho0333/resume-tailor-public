@@ -20,15 +20,26 @@ import xml.etree.ElementTree as ET
 import requests
 
 import config
+import profile as profile_module
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
+
+# Google News wants a language-REGION pair. English is what the rest of this
+# project reads, so only the region moves — enough to surface the local coverage
+# of a regional employer, which a US-only query misses entirely.
+_DEFAULT_REGION = "US"
+
+
+def _news_locale():
+    region = (profile_module.get().market_country or _DEFAULT_REGION).upper()
+    return {"hl": f"en-{region}", "gl": region, "ceid": f"{region}:en"}
 
 
 def _fetch_news_headlines(company, max_items=8):
     try:
         resp = requests.get(
             GOOGLE_NEWS_RSS,
-            params={"q": company, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            params={"q": company, **_news_locale()},
             headers={"User-Agent": config.HTTP_USER_AGENT},
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )
