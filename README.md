@@ -230,7 +230,7 @@ twin whose comments are the real documentation.
 |---|---|---|
 | `profile.yaml` | who you are (background, education, work authorisation) and **what you are looking for** — type of role, target and avoided roles, level, places, arrangement, pay floor, dealbreakers — plus two or three of your own bullets as a style reference | `run.py setup` |
 | `user_config.yaml` | paths, mode, per-section bullet caps, backend choice, job sources, notification channels | `run.py setup`, then edit |
-| `resume_db.yaml` | **every** bullet you could ever use, with the context and the allowed numbers behind each one | `run.py setup` reads your .docx, then hours of your own writing |
+| `resume_db.yaml` | **every** bullet you could ever use, with the context and the allowed numbers behind each one | `run.py setup` reads your .docx; `run.py import` folds in each later one |
 | `base_resume.yaml` | which bullets your approved résumé actually shows, keyed to the headings in the .docx | `run.py setup` writes it from your document; you review it once |
 
 Every axis in `profile.yaml`'s `search` block is optional, and **empty has a
@@ -241,6 +241,12 @@ A fifth file is committed, and is not about you: `templates/resume_template.docx
 a standard one-page layout in the shape the parser and the renderer expect. Start
 from it if your own résumé is written as paragraphs, or point `bootstrap` at it to
 watch a full run before your own career data is involved.
+
+**The database is a superset; a résumé is one view of it.** That is what makes
+`run.py import --resume <newer.docx>` safe to run whenever your résumé changes:
+it adds what is new and keeps everything else, including the bullets the new
+document does not happen to show. `bootstrap` writes the file from scratch and
+is for the first run only.
 
 `resume_db.yaml` is where output quality comes from. Each bullet's `context`
 field is both the background the model rewrites from and **the list of numbers it

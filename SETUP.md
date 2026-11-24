@@ -24,7 +24,7 @@ not have to read it to get started.
 
 ```bash
 .venv/bin/python run.py setup --only environment     # which model does what
-.venv/bin/python run.py setup --only resume          # re-read your .docx
+.venv/bin/python run.py setup --only resume          # re-read your .docx (first time)
 .venv/bin/python run.py setup --only identity        # who you are
 .venv/bin/python run.py setup --only search          # what you are looking for
 .venv/bin/python run.py setup --only sources         # where postings come from
@@ -123,6 +123,30 @@ This list was hardcoded as exactly `("Skills:", "Languages:")` until it became a
 setting, so a résumé reading `Technical Skills:` had no protection at all.
 `doctor` warns about any labelled line the list does not cover.
 
+### When you get a newer résumé
+
+Do **not** re-run `bootstrap` or `setup --only resume`. Both write the database
+from scratch, which is right exactly once — pointed at a second document they
+throw away the `context` you wrote, every `retired` flag, and the ids that
+`base_resume.yaml` references.
+
+```bash
+.venv/bin/python run.py import --resume ~/Desktop/Resume_2026.docx --dry-run
+.venv/bin/python run.py import --resume ~/Desktop/Resume_2026.docx
+```
+
+`import` only ever adds. The database holds every bullet you could ever use and
+a résumé shows a subset, so a bullet missing from the new document is kept. The
+only questions it asks are about sentences that look like a reworded version of
+one already there, and keeping the existing sentence is the default.
+
+Add `--set-base` when the new document is also your new *approved* résumé: it
+rewrites `base_resume.yaml` from it and repoints `resume_path`.
+
+This is also the quickest way to fill the database in the first place. Writing
+`context` by hand is the slow part; a longer or older résumé you still have
+lying around is a few more bullets for the price of one command.
+
 ### Then fill in `resume_db.yaml`
 
 This is the part that determines output quality, and the part nothing can do for
@@ -146,8 +170,7 @@ your résumé shows today. Two things have to hold, and `doctor` checks both:
   character** — a mismatch is a hard error, not a warning
 
 The same sentence deliberately lives in three places — the database, this file,
-and the document — so drift between them is detectable. Change the .docx and
-re-run `setup --only resume`.
+and the document — so drift between them is detectable.
 
 ---
 

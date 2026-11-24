@@ -1347,6 +1347,299 @@ DB_HEADER_COMMENT = """\
 """
 
 
+def _tag_sections(backend, sections):
+    """Ask the model for keywords/content_type per bullet, and collect the gaps.
+
+    Mutates each bullet's `tags` in place and returns the gap questions, so
+    `bootstrap` and `import` tag bullets identically. `import` passes only the
+    bullets it is about to add.
+    """
+    tags_by_id = bootstrap_engine.tag_and_find_gaps(backend, sections)
+    gaps = []
+    for section in sections:
+        for bullet in section["bullets"]:
+            info = tags_by_id.get(bullet["id"], {})
+            bullet["tags"] = {
+                "org": section["name"],
+                "keywords": info.get("keywords", []),
+                "content_type": info.get("content_type", []),
+            }
+            gap = info.get("gap")
+            if gap and gap.get("question"):
+                gaps.append({"bullet": bullet, "question": gap["question"]})
+    return tags_by_id, gaps
+
+
+def _run_gap_qa(backend, gaps):
+    """Ask about bullets with no quantitative outcome; fold any answer in.
+
+    Shared by `bootstrap` and `import`. An empty answer skips, and with no
+    terminal `ask.line` returns the empty default, so an unattended run asks
+    nothing.
+    """
+    if not gaps:
+        return
+    print(f"\n[{len(gaps)} gap(s)] Answer and it goes into the bullet "
+          "(press Enter to skip one):")
+    for g in gaps:
+        bullet = g["bullet"]
+        print(f"\n- {bullet['text'][:100]}")
+        print(f"  question: {g['question']}")
+        answer = ask.line("  answer: ")
+        if answer:
+            bullet["text"] = bootstrap_engine.refine_bullet_with_fact(
+                backend, bullet["text"], g["question"], answer,
+            )
+            print(f"  -> applied: {bullet['text'][:100]}")
+
+
+def _write_db(sections):
+    """Write resume_db.yaml with its header comment. Shared by bootstrap and import."""
+    yaml_body = yaml.safe_dump(
+        {"sections": sections}, allow_unicode=True, sort_keys=False,
+        default_flow_style=False, width=100000,
+    )
+    with open(config.DB_PATH, "w", encoding="utf-8") as f:
+        f.write(DB_HEADER_COMMENT + yaml_body)
+
+
+def _parse_resume(path, section_heading, log=print):
+    """Parse a .docx into experience blocks, or exit with the reason.
+
+    The three failure modes a real document hits, each with its own message:
+    the file is not there, the section heading is not there, and the bullets are
+    not bullets.
+    """
+    if not os.path.exists(path):
+        log(f"resume file not found: {path}")
+        sys.exit(1)
+    doc = docx.Document(path)
+    try:
+        blocks = resume_parser.parse_experience_blocks(doc, start_after=section_heading)
+    except ValueError as e:
+        log(f"parsing failed: {e}")
+        sys.exit(1)
+    if not blocks:
+        log("found no experience blocks — check your resume's formatting "
+            "(a company/location line must be followed by bulleted paragraphs). "
+            "templates/resume_template.docx is a document in the expected shape; "
+            "`python templates/make_template.py` regenerates it.")
+        sys.exit(1)
+    return blocks
+
+
+def cmd_import(args):
+    """Fold a newer résumé into the database, keeping everything already there.
+
+    `bootstrap` writes the database from scratch, which is right exactly once.
+    Pointed at a newer résumé it destroys the work the file exists to hold —
+    `context` (which is also the allowed-numbers whitelist), `retired`, labels,
+    hand-corrected keywords — and renumbers the ids that `base_resume.yaml` and
+    the decision journal reference.
+
+    This adds instead. The database is a superset of any one résumé, so a
+    bullet missing from the new document is kept, and the only questions asked
+    are about sentences that look like a reworded version of one already there.
+    See resume_merge.py.
+    """
+    import resume_merge
+
+    # Nobody runs `import` unattended, and every question it asks is a choice
+    # about the user's own sentences. Without this, piped answers are ignored and
+    # each one silently takes its default — which is safe here (keep what is
+    # approved) but means the import reports success having done almost nothing.
+    # The same omission in `setup` wrote an empty profile and printed "Nothing is
+    # missing". With no stdin at all, `ask` still falls back to the defaults.
+    ask.require_answers()
+
+    resume_path = os.path.abspath(args.resume)
+    if not os.path.exists(config.DB_PATH):
+        print(f"no database yet at {config.DB_PATH} — there is nothing to merge into.\n"
+              f"  python run.py bootstrap --resume {args.resume}\n"
+              "builds it from this document, and `import` is for every résumé after that.")
+        sys.exit(1)
+    try:
+        db_sections = resume_db.load_db(config.DB_PATH)
+    except (OSError, ValueError) as e:
+        print(f"the existing database will not load, so a merge cannot be trusted: {e}")
+        sys.exit(1)
+
+    blocks = _parse_resume(resume_path, args.section_heading)
+    plan = resume_merge.classify(blocks, db_sections)
+    _print_merge_plan(plan, resume_path)
+
+    if args.dry_run:
+        print("\n--dry-run: nothing was written.")
+        return
+
+    counts = plan["counts"]
+    if not (counts["reworded"] or counts["new"] or counts["new_sections"]
+            or any(s["header_changed"] for s in plan["sections"])):
+        print("\nThe database already holds everything in this document. Nothing to do.")
+        return
+
+    choices, header_updates = _ask_merge_choices(plan)
+
+    # Only the bullets actually being added are tagged — the rest already have
+    # tags, possibly hand-corrected ones.
+    to_tag = resume_merge.new_bullets_for_tagging(plan, choices)
+    tags_by_id, gaps = ({}, [])
+    if to_tag:
+        backend = llm_client.get_backend(getattr(args, "backend", None), role="light",
+                                         log=print)
+        print(f"\nTagging {sum(len(s['bullets']) for s in to_tag)} new bullet(s) "
+              f"({backend.name})...")
+        tags_by_id, gaps = _tag_sections(backend, to_tag)
+        _run_gap_qa(backend, gaps)
+        # The gap Q&A may have rewritten a sentence; carry that into the plan.
+        refined = {b["id"]: b["text"] for s in to_tag for b in s["bullets"]}
+        for section in plan["sections"]:
+            for item in section["items"]:
+                if item["new_id"] in refined:
+                    item["text"] = refined[item["new_id"]]
+
+    sections, summary = resume_merge.apply_plan(
+        plan, db_sections, choices=choices, header_updates=header_updates,
+        tags_by_id=tags_by_id)
+
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = f"{config.DB_PATH}.bak_import_{stamp}"
+    shutil.copy2(config.DB_PATH, backup)
+    _write_db(sections)
+
+    print(f"\nMerged into {os.path.basename(config.DB_PATH)} "
+          f"(previous file kept as {os.path.basename(backup)}):")
+    if summary["sections"]:
+        print(f"  new sections : {', '.join(summary['sections'])}")
+    if summary["added"]:
+        print(f"  added        : {', '.join(summary['added'])}")
+    if summary["replaced"]:
+        print(f"  replaced     : {', '.join(summary['replaced'])}")
+    for name, old_header, new_header in summary["headers"]:
+        print(f"  header       : {name}: {old_header!r} -> {new_header!r}")
+    if not any((summary["sections"], summary["added"], summary["replaced"],
+                summary["headers"])):
+        print("  nothing changed — every rewording was kept as it was")
+
+    if getattr(args, "set_base", False):
+        _adopt_as_base(resume_path, sections)
+    elif summary["added"] or summary["replaced"]:
+        print("\nThis did not touch base_resume.yaml, which records which bullets your "
+              "approved résumé shows.")
+        print("  If this document IS your new approved résumé, re-run with --set-base.")
+        if summary["replaced"]:
+            # Said here because the user has just caused it, rather than leaving
+            # them to meet it as a `doctor` warning later: the same sentence is
+            # meant to live in both files, and a replacement moves only one.
+            print(f"\n  Note: {', '.join(summary['replaced'])} now read differently in "
+                  "resume_db.yaml than in base_resume.yaml.")
+            print("  `doctor` will report that drift. Either copy the new wording into "
+                  "base_resume.yaml, or re-run with --set-base.")
+
+    steps = []
+    if summary["added"]:
+        steps.append(f"open {os.path.basename(config.DB_PATH)} and fill in `context` for "
+                     f"{', '.join(summary['added'][:4])}"
+                     f"{' ...' if len(summary['added']) > 4 else ''} — it is the background "
+                     "a rewrite draws on AND the list of numbers the tool may use")
+    steps.append(".venv/bin/python run.py doctor")
+    print("\nNext:")
+    for number, step in enumerate(steps, 1):
+        print(f"  {number}. {step}")
+
+
+def _print_merge_plan(plan, resume_path):
+    """The report: what the document says versus what the database already holds."""
+    marks = {"unchanged": "=", "reworded": "~", "new": "+"}
+    print(f"\nComparing {resume_path}\n      against {config.DB_PATH}")
+    for section in plan["sections"]:
+        suffix = "  (new section)" if section["is_new_section"] else ""
+        print(f"\n  {section['name']}{suffix}")
+        if section["header_changed"]:
+            print(f"    header line differs:")
+            print(f"      database: {section['db_header_text']!r}")
+            print(f"      document: {section['header_text']!r}")
+        for item in section["items"]:
+            mark = marks[item["verdict"]]
+            ident = item["id"] or item["new_id"] or ""
+            print(f"    {mark} {ident:<16} {item['verdict']}")
+    if plan["db_only"]:
+        print(f"\n  {len(plan['db_only'])} bullet(s) in the database are not in this "
+              "document. They are kept — the database holds every bullet you could ever "
+              "use, and a résumé shows a subset.")
+    c = plan["counts"]
+    print(f"\n  {c['unchanged']} unchanged · {c['reworded']} reworded · {c['new']} new · "
+          f"{c['new_sections']} new section(s) · {c['db_only']} kept as-is")
+
+
+def _ask_merge_choices(plan):
+    """Ask about each rewording and each changed header. Returns (choices, headers)."""
+    import resume_merge
+
+    choices, header_updates = {}, {}
+    reworded = [(s, i) for s in plan["sections"] for i in s["items"]
+                if i["verdict"] == resume_merge.REWORDED]
+    if reworded:
+        print(f"\n{len(reworded)} bullet(s) look like a reworded version of one already "
+              "in the database.")
+        print("Keeping is the default: the database sentence may carry `context`, and "
+              "base_resume.yaml may treat it as approved.")
+    for section, item in reworded:
+        print(f"\n~ {item['id']}  ({section['name']})")
+        print(f"  database: {item['db_text']}")
+        print(f"  document: {item['text']}")
+        if item["shared"]:
+            print(f"  shared figures: {', '.join(item['shared'])}")
+        answer = (ask.line("  [K]eep · [R]eplace · keep [B]oth (Enter = keep): ")
+                  or "k").strip().lower()[:1]
+        choices[item["id"]] = {"r": resume_merge.REPLACE,
+                               "b": resume_merge.BOTH}.get(answer, resume_merge.KEEP)
+
+    for section in plan["sections"]:
+        if not section["header_changed"]:
+            continue
+        print(f"\n{section['name']}: the employer line differs from the database.")
+        print(f"  database: {section['db_header_text']!r}")
+        print(f"  document: {section['header_text']!r}")
+        print("  The renderer matches this line character for character, so if the "
+              "document is the one you render from, adopt it.")
+        header_updates[section["name"]] = ask.confirm(
+            "  Adopt the document's line? (Y/n): ", default=True)
+    return choices, header_updates
+
+
+def _adopt_as_base(resume_path, sections):
+    """Make this document the approved résumé: rewrite base_resume.yaml, repoint config.
+
+    Only on an explicit --set-base. `base_resume.yaml` records which bullets are
+    *approved*, which an import cannot infer from a document.
+    """
+    base = {
+        "source_docx": resume_path,
+        "sections": [
+            {"name": s["name"], "header_text": s["header_text"],
+             "bullets": [{"id": b["id"], "text": b["text"]} for b in s["bullets"]]}
+            for s in sections
+        ],
+    }
+    path = minimal_tailor.BASE_YAML_PATH
+    if os.path.exists(path):
+        shutil.copy2(path, path + ".bak")
+    body = yaml.safe_dump(base, allow_unicode=True, sort_keys=False,
+                          default_flow_style=False, width=100000)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(BASE_HEADER_COMMENT + body)
+    _patch_user_config_keys({
+        "resume_path": [f"resume_path: {json.dumps(resume_path, ensure_ascii=False)}"],
+        "base_resume_path": [
+            f"base_resume_path: {json.dumps(resume_path, ensure_ascii=False)}"],
+    })
+    print(f"\n--set-base: rewrote {os.path.basename(path)} from this document and pointed "
+          "resume_path / base_resume_path at it.")
+    print("  Every bullet in the document is now treated as approved. Remove any line "
+          "you do not want treated that way.")
+
+
 def cmd_bootstrap(args):
     resume_path = os.path.abspath(args.resume)
     if not os.path.exists(resume_path):
@@ -1356,19 +1649,7 @@ def cmd_bootstrap(args):
     backend = llm_client.get_backend(getattr(args, "backend", None), role="light", log=print)
     print(f"backend: {backend.name}")
 
-    doc = docx.Document(resume_path)
-    try:
-        blocks = resume_parser.parse_experience_blocks(doc, start_after=args.section_heading)
-    except ValueError as e:
-        print(f"parsing failed: {e}")
-        sys.exit(1)
-
-    if not blocks:
-        print("found no experience blocks — check your resume's formatting "
-              "(a company/location line must be followed by bulleted paragraphs). "
-              "templates/resume_template.docx is a document in the expected shape; "
-              "`python templates/make_template.py` regenerates it.")
-        sys.exit(1)
+    blocks = _parse_resume(resume_path, args.section_heading)
 
     print(f"\nDetected {len(blocks)} section(s):")
     for b in blocks:
@@ -1390,46 +1671,16 @@ def cmd_bootstrap(args):
         sections.append({"name": name, "header_text": b["header_text"], "bullets": bullets})
 
     print("\nTagging the bullets and looking for gaps (LLM)...")
-    tags_by_id = bootstrap_engine.tag_and_find_gaps(backend, sections)
+    _tags_by_id, gaps = _tag_sections(backend, sections)
 
-    gaps = []
-    for section in sections:
-        for bullet in section["bullets"]:
-            info = tags_by_id.get(bullet["id"], {})
-            bullet["tags"] = {
-                "org": section["name"],
-                "keywords": info.get("keywords", []),
-                "content_type": info.get("content_type", []),
-            }
-            gap = info.get("gap")
-            if gap and gap.get("question"):
-                gaps.append({"bullet": bullet, "question": gap["question"]})
-
-    if gaps:
-        print(f"\n[{len(gaps)} gap(s)] Answer and it goes into the bullet "
-              "(press Enter to skip one):")
-        for g in gaps:
-            bullet = g["bullet"]
-            print(f"\n- {bullet['text'][:100]}")
-            print(f"  question: {g['question']}")
-            answer = ask.line("  answer: ")
-            if answer:
-                bullet["text"] = bootstrap_engine.refine_bullet_with_fact(
-                    backend, bullet["text"], g["question"], answer,
-                )
-                print(f"  -> applied: {bullet['text'][:100]}")
+    _run_gap_qa(backend, gaps)
 
     if os.path.exists(config.DB_PATH):
         backup_path = config.DB_PATH + ".bak"
         os.replace(config.DB_PATH, backup_path)
         print(f"\nBacked up the existing {config.DB_PATH} to {backup_path}.")
 
-    yaml_body = yaml.safe_dump(
-        {"sections": sections}, allow_unicode=True, sort_keys=False,
-        default_flow_style=False, width=100000,
-    )
-    with open(config.DB_PATH, "w", encoding="utf-8") as f:
-        f.write(DB_HEADER_COMMENT + yaml_body)
+    _write_db(sections)
 
     _write_user_config(resume_path, sections)
     wrote_base = _write_base_resume_draft(resume_path, sections)
@@ -1452,8 +1703,9 @@ def cmd_bootstrap(args):
         print(f"  2. {os.path.basename(minimal_tailor.BASE_YAML_PATH)} already existed and was "
               "left alone.")
     print("  3. .venv/bin/python run.py doctor")
-    print("  4. .venv/bin/python run.py tailor --jd-file posting.txt --company \"Acme\" "
-          "--role \"Product Manager Intern\"")
+    print("  4. .venv/bin/python run.py tailor --jd-file posting.txt")
+    print("\nGot another, newer résumé? `run.py import --resume <newer.docx>` folds it in "
+          "and keeps everything above; re-running bootstrap would not.")
 
 
 def _patch_yaml_keys(text, updates):
@@ -1490,6 +1742,32 @@ def _patch_yaml_keys(text, updates):
         for key in missing:
             out.extend(updates[key])
     return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _patch_user_config_keys(updates):
+    """Set top-level keys in user_config.yaml, leaving every other byte alone.
+
+    Lives next to `_patch_yaml_keys` because that is the part worth getting
+    right: the file is mostly comments — the copied explanations of each setting
+    plus whatever notes the user wrote about their own decisions — and
+    re-serialising it keeps the values while throwing the prose away.
+
+    `setup_wizard` and `import` both call this rather than each reimplementing it.
+    """
+    path = config.USER_CONFIG_PATH
+    if os.path.exists(path):
+        shutil.copy2(path, path + ".bak")
+        with open(path, "r", encoding="utf-8") as f:
+            patched = _patch_yaml_keys(f.read(), updates)
+    else:
+        header = ("# Your settings. Gitignored: never committed, never shared.\n"
+                  "# `python run.py setup` patches the keys it owns and leaves every other\n"
+                  "# line — including your comments — alone.\n"
+                  "# See user_config.example.yaml for every key and what it does.\n\n")
+        patched = header + "\n".join("\n".join(lines) for lines in updates.values()) + "\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(patched)
+    return sorted(updates)
 
 
 def _write_user_config(resume_path, sections):
@@ -1661,6 +1939,7 @@ def _check_base_resume(base_yaml):
 
     # rule 2: every header_text is a heading in the document
     docx_path = config.BASE_RESUME_PATH or base.get("source_docx")
+    para_set = None
     if docx_path and os.path.exists(docx_path):
         try:
             doc = docx.Document(docx_path)
@@ -1699,16 +1978,40 @@ def _check_base_resume(base_yaml):
                                  "add the missing bullets, or the tailored résumé will be "
                                  "shorter than the one you approved"))
 
-    # a section the base does not mention renders nothing, which minimal mode treats
-    # as a broken file rather than an instruction to drop a job
+    # A section the base does not mention renders nothing. Whether that is a
+    # broken file or simply extra material depends on one thing: is the section a
+    # heading in the base DOCUMENT?
+    #
+    #   - it is      -> the document has a place for it and the base leaves it
+    #                   empty, so a job would silently vanish from the output.
+    #                   That is the content-loss case this rule was written for.
+    #   - it is not  -> the database just holds more than this résumé shows,
+    #                   which is the normal state after `run.py import` and the
+    #                   whole point of the database being a superset. Nothing can
+    #                   be lost, because nothing renders it.
+    #
+    # Before that distinction existed, importing a résumé from a different job
+    # failed `doctor` immediately, and the suggested fix was to delete the
+    # material that had just been imported.
     if db_sections is not None:
         covered = {(sec.get("name") or "").strip() for sec in base_sections}
+        header_by_name = {s["name"]: (s.get("header_text") or "").strip()
+                          for s in db_sections}
         uncovered = [s["name"] for s in db_sections if s["name"] not in covered]
-        if uncovered:
+        in_document = [n for n in uncovered
+                       if para_set is not None and header_by_name.get(n) in para_set]
+        extra = [n for n in uncovered if n not in in_document]
+        if in_document:
             rows.append((_FAIL,
-                         "no entry for section(s) " + ", ".join(uncovered),
-                         "add them (bootstrap writes the file from your document), or remove "
-                         "them from resume_db.yaml if they are no longer on your résumé"))
+                         "no entry for section(s) " + ", ".join(in_document)
+                         + ", which the document does have a heading for",
+                         "add them to base_resume.yaml, or the tailored résumé will render "
+                         "those jobs empty"))
+        if extra:
+            rows.append((_OK,
+                         f"{len(extra)} section(s) in the database are not on this résumé "
+                         f"({', '.join(extra[:3])}" + (" ..." if len(extra) > 3 else "") + ")",
+                         ""))
 
     if not rows:
         rows.append((_OK, f"{pinned} bullets pinned, ids and headings all match", ""))
@@ -2073,6 +2376,22 @@ def main():
     p_pending.add_argument("--skip", metavar="ID",
                            help="pass on this pending id (same as pressing ⏭️)")
     p_pending.set_defaults(func=cmd_pending)
+
+    p_import = sub.add_parser(
+        "import",
+        help="merge a newer résumé into the experience database, keeping what is there")
+    p_import.add_argument("--resume", required=True,
+                          help="the newer .docx to read")
+    p_import.add_argument("--section-heading", default="EXPERIENCE",
+                          help="the heading your work history sits under (default: EXPERIENCE)")
+    p_import.add_argument("--dry-run", action="store_true",
+                          help="print the comparison and write nothing")
+    p_import.add_argument("--set-base", action="store_true",
+                          help="also treat this document as your approved résumé: rewrite "
+                               "base_resume.yaml from it and point resume_path at it")
+    p_import.add_argument("--backend", metavar="NAME",
+                          help="backend used to tag the newly added bullets")
+    p_import.set_defaults(func=cmd_import)
 
     p_setup = sub.add_parser(
         "setup", help="interactive first-time setup — start here")

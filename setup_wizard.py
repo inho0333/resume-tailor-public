@@ -186,24 +186,16 @@ def _save_profile(data):
 
 
 def _patch_user_config(updates):
-    """Patch user_config.yaml in place, comments intact. updates: {key: [lines]}."""
+    """Patch user_config.yaml in place, comments intact. updates: {key: [lines]}.
+
+    The writing itself lives in `run._patch_user_config_keys`, next to the
+    comment-preserving `_patch_yaml_keys` it depends on; this adds the line the
+    wizard prints.
+    """
     import run  # imported here: run imports this module
 
-    path = config.USER_CONFIG_PATH
-    if os.path.exists(path):
-        shutil.copy2(path, path + ".bak")
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-        patched = run._patch_yaml_keys(text, updates)
-    else:
-        header = ("# Your settings. Gitignored: never committed, never shared.\n"
-                  "# `python run.py setup` patches the keys it owns and leaves every other\n"
-                  "# line — including your comments — alone.\n"
-                  "# See user_config.example.yaml for every key and what it does.\n\n")
-        patched = header + "\n".join("\n".join(lines) for lines in updates.values()) + "\n"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(patched)
-    print(f"  wrote {os.path.basename(path)}: {', '.join(updates)}")
+    keys = run._patch_user_config_keys(updates)
+    print(f"  wrote {os.path.basename(config.USER_CONFIG_PATH)}: {', '.join(keys)}")
 
 
 def _yaml_block(key, value):
@@ -297,6 +289,22 @@ def stage_resume():
     print("  heading, and real Word bullets rather than prose paragraphs.\n")
     if current:
         print(f"  Currently: {current}")
+
+    # Reading a document writes the database from scratch, which is right exactly
+    # once. Offering it a second time is offering to throw away the `context` the
+    # user wrote — the slow, valuable part — along with every `retired` flag and
+    # the ids base_resume.yaml references.
+    if os.path.exists(config.DB_PATH):
+        print(f"\n  {os.path.basename(config.DB_PATH)} already exists. Re-reading a document")
+        print("  here writes it from scratch and would discard the `context` you wrote,")
+        print("  every `retired` flag, and the ids base_resume.yaml points at.")
+        print("\n  To fold a NEWER résumé in without losing any of that:")
+        print("    python run.py import --resume <newer.docx> --dry-run")
+        print("    python run.py import --resume <newer.docx>")
+        if not ask.confirm("\n  Start the database over from a document anyway? (y/N): ",
+                           default=False):
+            print("  Left it alone.")
+            return True
 
     path = ask.line("  Path to your résumé .docx"
                     + (f" [{current}]" if current else "") + ": ") or current

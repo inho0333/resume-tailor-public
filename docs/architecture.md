@@ -88,8 +88,9 @@ Two boundaries in that diagram are load-bearing:
 
 | file | role |
 |---|---|
-| `run.py` | the CLI: `setup`, `watch`, `tailor`, `bootstrap`, `polish`, `review`, `inbox`, `digest`, `pending`, `doctor`, `decisions`. Orchestration lives here and only here. |
+| `run.py` | the CLI: `setup`, `import`, `watch`, `tailor`, `bootstrap`, `polish`, `review`, `inbox`, `digest`, `pending`, `doctor`, `decisions`. Orchestration lives here and only here. |
 | `setup_wizard.py` | `run.py setup`: six stages, each writing only the keys it owns. |
+| `resume_merge.py` | `run.py import`: folds a newer résumé into the database. Pure functions over data — `classify` produces a plan, `apply_plan` produces new sections — so `run.py` owns every question and every write. |
 | `bot_listener.py` | long-polls Telegram for approve/skip presses. Optional. |
 | `pagefit.py` | also a CLI (`pagefit.py --grant`, `pagefit.py file.docx`) for the Word measurement. |
 | `validate.py` | also a CLI, for checking a generated .docx against the template. |
@@ -263,7 +264,22 @@ Break these and the tool stops being trustworthy.
    opposite — a default that quietly filters — is how the first version applied
    the example profile's product/strategy role list to every posting a new user
    ever saw.
-14. **A source that cannot run says so, loudly.** `check_auth` makes a real
+14. **The experience database is a superset; a résumé is one view of it.**
+   `resume_db.yaml` holds every bullet you could ever use, and any one résumé
+   shows a subset — so importing a résumé can only ever *add*
+   (`resume_merge.py`). A bullet absent from the new document is kept, and a
+   section the approved résumé has no heading for is extra material rather than
+   an error. `bootstrap` writes the file from scratch and is for the first run
+   only; it is the one command in the project that can lose work, which is why
+   `import` exists and why the wizard will not re-read a document over an
+   existing database without asking.
+15. **An id is a permanent handle.** Bullet ids are referenced by
+   `base_resume.yaml`, by `state/decisions.jsonl` and by `tailor --keep`, so
+   nothing renumbers them. `resume_merge.next_id` allocates past the highest in
+   use rather than by position — generating them by position is what made a
+   re-run of `bootstrap` silently repoint the approved baseline at different
+   sentences.
+16. **A source that cannot run says so, loudly.** `check_auth` makes a real
    request where it can, because an empty result is indistinguishable from a
    quiet day: one placeholder board token was polled every two minutes for a
    week and reported throughout as "no new postings".
